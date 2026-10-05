@@ -271,14 +271,21 @@ app.post("/api/admin/logout", (_req, res) => {
   res.json({ ok: true });
 });
 
-app.put("/api/admin/rules", requireAdmin, json, (req, res) => {
+// Topics are saved one at a time (add/update, delete, reorder)
+const respond = (res, fn) => {
   try {
-    res.json(store.save(req.body?.sections));
+    res.json(fn());
   } catch (err) {
-    console.error("save failed:", err);
+    console.error("rules update failed:", err.message);
     res.status(400).json({ error: err.message || "บันทึกไม่สำเร็จ" });
   }
-});
+};
+
+app.post("/api/admin/section", requireAdmin, json, (req, res) => respond(res, () => store.upsert(req.body)));
+app.delete("/api/admin/section/:id", requireAdmin, (req, res) => respond(res, () => store.remove(req.params.id)));
+app.post("/api/admin/section/:id/move", requireAdmin, json, (req, res) =>
+  respond(res, () => store.move(req.params.id, Number(req.body?.delta) || 0))
+);
 
 app.get("/", (_req, res) => res.redirect("/admin"));
 app.get("/admin", (_req, res) => res.sendFile(path.join(__dirname, "public", "admin.html")));

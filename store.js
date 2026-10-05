@@ -1,3 +1,4 @@
+const crypto = require("crypto");
 const fs = require("fs");
 const path = require("path");
 
@@ -45,26 +46,52 @@ function get() {
   return state;
 }
 
-function clean(input) {
-  if (!Array.isArray(input) || input.length > LIMITS.sections) {
-    throw new Error("รูปแบบข้อมูลไม่ถูกต้อง");
-  }
-  return input.map((s) => ({
-    id: typeof s.id === "string" && s.id ? s.id.slice(0, 64) : require("crypto").randomUUID(),
-    category: String(s.category || "ทั่วไป").trim().slice(0, LIMITS.category) || "ทั่วไป",
-    title: String(s.title || "").trim().slice(0, LIMITS.title),
-    body: String(s.body || "").trim().slice(0, LIMITS.body),
-  })).filter((s) => s.title || s.body);
+function cleanOne(s, id) {
+  const item = {
+    id,
+    category: String(s?.category || "").trim().slice(0, LIMITS.category) || "ทั่วไป",
+    title: String(s?.title || "").trim().slice(0, LIMITS.title),
+    body: String(s?.body || "").trim().slice(0, LIMITS.body),
+  };
+  if (!item.title && !item.body) throw new Error("กรุณากรอกหัวข้อหรือรายละเอียดอย่างน้อยหนึ่งอย่าง");
+  return item;
 }
 
-function save(sections) {
-  const next = { updatedAt: new Date().toISOString(), sections: clean(sections) };
+function persist(sections) {
+  const next = { updatedAt: new Date().toISOString(), sections };
   fs.mkdirSync(DATA_DIR, { recursive: true });
   const tmp = `${FILE}.tmp`;
   fs.writeFileSync(tmp, JSON.stringify(next, null, 2));
   fs.renameSync(tmp, FILE);
   state = next;
   return state;
+}
+
+// Each topic is saved on its own: add (new id, goes on top) or update (existing id)
+function upsert(input) {
+  const existing = typeof input?.id === "string" ? state.sections.findIndex((s) => s.id === input.id) : -1;
+  if (existing === -1 && state.sections.length >= LIMITS.sections) throw new Error("จำนวนหัวข้อเต็มแล้ว");
+  const item = cleanOne(input, existing === -1 ? crypto.randomUUID() : state.sections[existing].id);
+  const sections = [...state.sections];
+  if (existing === -1) sections.unshift(item);
+  else sections[existing] = item;
+  return persist(sections);
+}
+
+function remove(id) {
+  const sections = state.sections.filter((s) => s.id !== id);
+  if (sections.length === state.sections.length) throw new Error("ไม่พบหัวข้อนี้");
+  return persist(sections);
+}
+
+function move(id, delta) {
+  const i = state.sections.findIndex((s) => s.id === id);
+  const j = i + (delta < 0 ? -1 : 1);
+  if (i === -1) throw new Error("ไม่พบหัวข้อนี้");
+  if (j < 0 || j >= state.sections.length) return state;
+  const sections = [...state.sections];
+  [sections[i], sections[j]] = [sections[j], sections[i]];
+  return persist(sections);
 }
 
 // Plain-text rendering used as the chatbot's knowledge
@@ -80,4 +107,4 @@ function info() {
   return { persistent: Boolean(VOLUME_DIR) && writable, writable, loadedFromDisk, sections: state.sections.length };
 }
 
-module.exports = { get, save, toKnowledge, info };
+module.exports = { get, upsert, remove, move, toKnowledge, info };

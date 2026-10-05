@@ -7,22 +7,21 @@
 
   let sections = [];
   let updatedAt = null;
-  let dirty = false;
   let persistent = true;
 
   // refs used by the editor view
-  let statusEl = null;
   let listEl = null;
   let statEls = null;
   let query = "";
 
   const ICONS = {
     plus: '<path d="M12 5v14M5 12h14"/>',
-    save: '<path d="M5 4h11l3 3v13H5z"/><path d="M8 4v5h7V4M8 20v-6h8v6"/>',
     logout: '<path d="M9 4H5v16h4"/><path d="M16 8l4 4-4 4M20 12H9"/>',
     up: '<path d="M6 14l6-6 6 6"/>',
     down: '<path d="M6 10l6 6 6-6"/>',
     trash: '<path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/>',
+    edit: '<path d="M4 20h4L19 9l-4-4L4 16z"/><path d="M13.5 6.5l4 4"/>',
+    close: '<path d="M6 6l12 12M18 6L6 18"/>',
     eye: '<path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/>',
     eyeOff: '<path d="M3 3l18 18M10.6 5.1A10 10 0 0 1 12 5c6.5 0 10 7 10 7a17 17 0 0 1-3.2 4M6.5 6.6C3.8 8.4 2 12 2 12s3.5 7 10 7c1.7 0 3.2-.4 4.5-1"/>',
     lock: '<rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/>',
@@ -64,7 +63,7 @@
   function toast(msg) {
     toastEl.textContent = msg;
     toastEl.classList.add("show");
-    setTimeout(() => toastEl.classList.remove("show"), 2400);
+    setTimeout(() => toastEl.classList.remove("show"), 2600);
   }
 
   async function api(path, opts = {}) {
@@ -78,27 +77,28 @@
     return data;
   }
 
-  function setDirty(v) {
-    dirty = v;
-    if (statusEl) {
-      statusEl.textContent = v ? "มีการแก้ไขที่ยังไม่บันทึก" : "บันทึกแล้ว";
-      statusEl.className = "status" + (v ? " dirty" : "");
-    }
-    updateStats();
-  }
-
-  window.addEventListener("beforeunload", (e) => {
-    if (dirty) { e.preventDefault(); e.returnValue = ""; }
-  });
-
   const fmtDate = (iso) =>
     iso
       ? new Date(iso).toLocaleString("th-TH", { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" })
       : "ยังไม่เคยบันทึก";
 
+  // Apply the server's latest state and redraw
+  function applyState(data) {
+    sections = data.sections || [];
+    updatedAt = data.updatedAt;
+    renderList();
+  }
+
+  // Session expired mid-action -> back to login
+  function handleError(ex) {
+    if (ex.status === 401) return showLogin(true);
+    toast(ex.message);
+  }
+
   // ---------- Login ----------
   function showLogin(enabled, reason) {
     topActions.replaceChildren();
+    listEl = statEls = null;
 
     const err = el("div", { className: "error", role: "alert" });
     const pw = el("input", { className: "input", type: "password", autocomplete: "current-password", required: true, placeholder: "กรอกรหัสผ่าน" });
@@ -146,100 +146,133 @@
     if (enabled) pw.focus();
   }
 
-  // ---------- Editor ----------
-  const newSection = () => ({ id: crypto.randomUUID(), category: "", title: "", body: "" });
+  // ---------- Topic dialog (add / edit one topic) ----------
+  function openTopicDialog(topic) {
+    const editing = Boolean(topic);
+    const dlg = el("dialog", { className: "modal" });
 
-  function updateStats() {
-    if (!statEls) return;
-    statEls.count.textContent = String(sections.length);
-    statEls.cats.textContent = String(new Set(sections.map((s) => s.category.trim()).filter(Boolean)).size);
-    statEls.updated.textContent = fmtDate(updatedAt);
-  }
-
-  function applyFilter() {
-    const q = query.trim().toLowerCase();
-    listEl.querySelectorAll("[data-idx]").forEach((card) => {
-      const s = sections[Number(card.dataset.idx)];
-      const hit = !q || `${s.category}\n${s.title}\n${s.body}`.toLowerCase().includes(q);
-      card.hidden = !hit;
-    });
-  }
-
-  function card(s, i) {
-    const category = el("input", { className: "input", value: s.category, placeholder: "หมวดหมู่ เช่น การลา", maxLength: 80 });
+    const category = el("input", { className: "input", value: topic?.category ?? "", placeholder: "เช่น การลา, เวลาทำงาน, สวัสดิการ", maxLength: 80 });
     category.setAttribute("list", "cats");
-    category.setAttribute("aria-label", "หมวดหมู่");
-    const title = el("input", { className: "input title-input", value: s.title, placeholder: "หัวข้อ เช่น สิทธิ์การลาพักร้อน", maxLength: 200 });
-    title.setAttribute("aria-label", "หัวข้อ");
-    const body = el("textarea", { className: "textarea", value: s.body, placeholder: "รายละเอียดของกฎเกณฑ์", maxLength: MAX_BODY });
-    body.setAttribute("aria-label", "รายละเอียด");
+    const title = el("input", { className: "input", value: topic?.title ?? "", placeholder: "เช่น สิทธิ์การลาพักร้อน", maxLength: 200 });
+    const body = el("textarea", { className: "textarea", value: topic?.body ?? "", placeholder: "รายละเอียดของกฎเกณฑ์", maxLength: MAX_BODY });
     const counter = el("span", { className: "hint" });
     const showCount = () => (counter.textContent = `${body.value.length.toLocaleString()} / ${MAX_BODY.toLocaleString()} ตัวอักษร`);
     showCount();
+    body.addEventListener("input", showCount);
 
-    for (const [node, key] of [[category, "category"], [title, "title"], [body, "body"]]) {
-      node.addEventListener("input", () => {
-        s[key] = node.value;
-        if (key === "body") showCount();
-        node.closest(".card")?.classList.remove("invalid");
-        setDirty(true);
-      });
-    }
+    const err = el("div", { className: "error", role: "alert" });
+    const close = () => dlg.close();
+    const cancel = button("ยกเลิก", { onclick: close });
+    const saveBtn = button(editing ? "บันทึกการแก้ไข" : "บันทึกหัวข้อ", { cls: "primary", type: "submit" });
 
-    const filtering = query.trim() !== "";
-    const tools = el(
+    const head = el(
       "div",
-      { className: "tools" },
-      iconButton("up", "เลื่อนขึ้น", { disabled: i === 0 || filtering, onclick: () => move(i, -1) }),
-      iconButton("down", "เลื่อนลง", { disabled: i === sections.length - 1 || filtering, onclick: () => move(i, 1) }),
-      iconButton("trash", "ลบหัวข้อ", {
+      { className: "modal-head" },
+      el("h2", { textContent: editing ? "แก้ไขหัวข้อ" : "เพิ่มหัวข้อใหม่" }),
+      iconButton("close", "ปิด", { onclick: close })
+    );
+
+    const form = el(
+      "form",
+      { className: "modal-body" },
+      el("label", { className: "field" }, "หมวดหมู่", category),
+      el("label", { className: "field" }, "หัวข้อ", title),
+      el("label", { className: "field" }, "รายละเอียด", body),
+      el("div", { className: "modal-meta" }, el("span", { className: "hint", textContent: "ขึ้นบรรทัดใหม่เพื่อแยกย่อหน้า" }), counter),
+      err,
+      el("div", { className: "modal-actions" }, cancel, saveBtn)
+    );
+
+    form.onsubmit = async (e) => {
+      e.preventDefault();
+      err.textContent = "";
+      if (!title.value.trim() && !body.value.trim()) {
+        err.textContent = "กรุณากรอกหัวข้อหรือรายละเอียดอย่างน้อยหนึ่งอย่าง";
+        title.focus();
+        return;
+      }
+      saveBtn.disabled = true;
+      try {
+        const data = await api("/api/admin/section", {
+          method: "POST",
+          body: { id: topic?.id, category: category.value, title: title.value, body: body.value },
+        });
+        dlg.close();
+        applyState(data);
+        toast(editing ? "บันทึกการแก้ไขแล้ว บอท LINE ใช้ข้อมูลใหม่ทันที" : "เพิ่มหัวข้อแล้ว บอท LINE ใช้ข้อมูลใหม่ทันที");
+      } catch (ex) {
+        if (ex.status === 401) { dlg.close(); return showLogin(true); }
+        err.textContent = ex.message;
+        saveBtn.disabled = false;
+      }
+    };
+
+    dlg.append(head, form);
+    dlg.addEventListener("close", () => dlg.remove());
+    dlg.addEventListener("click", (e) => { if (e.target === dlg) dlg.close(); }); // click on backdrop
+    document.body.append(dlg);
+    dlg.showModal();
+    (editing ? body : title).focus();
+  }
+
+  // ---------- Editor (topic list) ----------
+  function updateStats() {
+    if (!statEls) return;
+    statEls.count.textContent = String(sections.length);
+    statEls.cats.textContent = String(new Set(sections.map((s) => s.category)).size);
+    statEls.updated.textContent = fmtDate(updatedAt);
+  }
+
+  async function act(fn) {
+    try {
+      applyState(await fn());
+    } catch (ex) {
+      handleError(ex);
+    }
+  }
+
+  function preview(text) {
+    const t = text.replace(/\s+/g, " ").trim();
+    return t.length > 140 ? `${t.slice(0, 140)}...` : t;
+  }
+
+  function item(s, i, filtering) {
+    const actions = el(
+      "div",
+      { className: "item-actions" },
+      iconButton("edit", "แก้ไข", { onclick: () => openTopicDialog(s) }),
+      iconButton("up", "เลื่อนขึ้น", { disabled: i === 0 || filtering, onclick: () => act(() => api(`/api/admin/section/${s.id}/move`, { method: "POST", body: { delta: -1 } })) }),
+      iconButton("down", "เลื่อนลง", { disabled: i === sections.length - 1 || filtering, onclick: () => act(() => api(`/api/admin/section/${s.id}/move`, { method: "POST", body: { delta: 1 } })) }),
+      iconButton("trash", "ลบ", {
         cls: "danger",
         onclick: () => {
-          if (!confirm("ลบหัวข้อนี้ใช่หรือไม่?")) return;
-          sections.splice(i, 1);
-          setDirty(true);
-          renderList();
+          if (!confirm(`ลบหัวข้อ "${s.title || s.category}" ใช่หรือไม่?`)) return;
+          act(async () => {
+            const data = await api(`/api/admin/section/${s.id}`, { method: "DELETE" });
+            toast("ลบหัวข้อแล้ว");
+            return data;
+          });
         },
       })
     );
 
-    const c = el(
-      "article",
-      { className: "card" },
-      el(
-        "div",
-        { className: "card-head" },
-        el("span", { className: "badge", textContent: String(i + 1).padStart(2, "0") }),
-        el("div", { className: "grid" }, category, title)
-      ),
-      body,
-      el("div", { className: "card-foot" }, counter, tools)
+    const main = el(
+      "div",
+      { className: "item-main" },
+      el("span", { className: "tag", textContent: s.category }),
+      el("h3", { textContent: s.title || "(ไม่มีหัวข้อ)" }),
+      el("p", { className: "preview", textContent: preview(s.body) })
     );
+
+    const c = el("article", { className: "item" }, el("span", { className: "badge", textContent: String(i + 1).padStart(2, "0") }), main, actions);
     c.dataset.idx = String(i);
+    c.addEventListener("dblclick", () => openTopicDialog(s));
     return c;
   }
 
-  function move(i, d) {
-    const j = i + d;
-    if (j < 0 || j >= sections.length) return;
-    [sections[i], sections[j]] = [sections[j], sections[i]];
-    setDirty(true);
-    renderList();
-  }
-
-  function addSection() {
-    sections.unshift(newSection());
-    query = "";
-    const q = document.getElementById("q");
-    if (q) q.value = "";
-    setDirty(true);
-    renderList();
-    const first = listEl.querySelector(".card");
-    first?.scrollIntoView({ behavior: "smooth", block: "center" });
-    first?.querySelector("input.input")?.focus({ preventScroll: true });
-  }
-
   function renderList() {
+    updateStats();
+    if (!listEl) return;
     if (!sections.length) {
       const e = el("div", { className: "empty" });
       const ic = icon("book", 28);
@@ -248,48 +281,24 @@
         ic,
         el("strong", { textContent: "ยังไม่มีหัวข้อ" }),
         "เริ่มใส่กฎเกณฑ์ของบริษัท เพื่อให้บอท LINE ตอบพนักงานได้",
-        el("div", {}, button("เพิ่มหัวข้อแรก", { cls: "primary", ico: "plus", onclick: addSection }))
+        el("div", {}, button("เพิ่มหัวข้อแรก", { cls: "primary", ico: "plus", onclick: () => openTopicDialog() }))
       );
       listEl.replaceChildren(e);
-      updateStats();
       return;
     }
-    const dl = el("datalist", { id: "cats" });
-    dl.append(...[...new Set(sections.map((s) => s.category).filter(Boolean))].map((c) => el("option", { value: c })));
-    listEl.replaceChildren(dl, ...sections.map(card));
-    applyFilter();
-    updateStats();
-  }
 
-  async function save(btn) {
-    // Don't silently drop blank sections: point at them instead
-    const blankIdx = sections.findIndex((s) => !s.title.trim() && !s.body.trim());
-    if (blankIdx !== -1) {
-      query = "";
-      const q = document.getElementById("q");
-      if (q) q.value = "";
-      renderList();
-      const card = listEl.querySelector(`[data-idx="${blankIdx}"]`);
-      card?.classList.add("invalid");
-      card?.scrollIntoView({ behavior: "smooth", block: "center" });
-      card?.querySelector(".title-input")?.focus({ preventScroll: true });
-      toast("กรุณากรอกหัวข้อหรือรายละเอียดก่อนบันทึก หรือกดลบหัวข้อที่ไม่ใช้");
-      return;
-    }
-    btn.disabled = true;
-    try {
-      const data = await api("/api/admin/rules", { method: "PUT", body: { sections } });
-      sections = data.sections;
-      updatedAt = data.updatedAt;
-      setDirty(false);
-      renderList();
-      toast("บันทึกเรียบร้อย บอท LINE ใช้ข้อมูลใหม่ทันที");
-    } catch (ex) {
-      if (ex.status === 401) return showLogin(true);
-      toast(ex.message);
-    } finally {
-      btn.disabled = false;
-    }
+    const q = query.trim().toLowerCase();
+    const filtering = q !== "";
+    const dl = el("datalist", { id: "cats" });
+    dl.append(...[...new Set(sections.map((s) => s.category))].map((c) => el("option", { value: c })));
+
+    const rows = sections
+      .map((s, i) => ({ s, i }))
+      .filter(({ s }) => !q || `${s.category}\n${s.title}\n${s.body}`.toLowerCase().includes(q))
+      .map(({ s, i }) => item(s, i, filtering));
+
+    const none = el("div", { className: "empty slim" }, el("strong", { textContent: "ไม่พบหัวข้อที่ค้นหา" }), "ลองเปลี่ยนคำค้นหา");
+    listEl.replaceChildren(dl, ...(rows.length ? rows : [none]));
   }
 
   function stat(label, small = false) {
@@ -300,10 +309,7 @@
   function showEditor() {
     const logout = button("ออกจากระบบ", { cls: "ghost", ico: "logout" });
     logout.onclick = async () => {
-      if (dirty && !confirm("มีการแก้ไขที่ยังไม่บันทึก ต้องการออกจากระบบหรือไม่?")) return;
-      setDirty(false);
       await api("/api/admin/logout", { method: "POST" });
-      statEls = statusEl = listEl = null;
       showLogin(true);
     };
     topActions.replaceChildren(logout);
@@ -312,10 +318,6 @@
     const sCats = stat("จำนวนหมวดหมู่");
     const sUpd = stat("บันทึกล่าสุด", true);
     statEls = { count: sCount.value, cats: sCats.value, updated: sUpd.value };
-
-    statusEl = el("span", { className: "status", textContent: "บันทึกแล้ว" });
-    const saveBtn = button("บันทึก", { cls: "primary", ico: "save" });
-    saveBtn.onclick = () => save(saveBtn);
 
     const q = el("input", { className: "input", id: "q", type: "search", placeholder: "ค้นหาในหัวข้อทั้งหมด", autocomplete: "off" });
     q.setAttribute("aria-label", "ค้นหา");
@@ -334,14 +336,14 @@
         { className: "page-head" },
         el("span", { className: "eyebrow", textContent: "Knowledge Base" }),
         el("h1", { textContent: "จัดการกฎเกณฑ์บริษัท" }),
-        el("p", { textContent: "ข้อมูลทั้งหมดที่นี่คือสิ่งที่บอท LINE ใช้ตอบพนักงาน บันทึกแล้วมีผลทันที ไม่ต้อง deploy ใหม่" }),
+        el("p", { textContent: "แต่ละหัวข้อแยกเป็นรายการของตัวเอง เพิ่ม แก้ไข หรือลบได้ทีละหัวข้อ และบันทึกทันที บอท LINE ใช้ข้อมูลใหม่ได้เลย" }),
         el("div", { className: "stats" }, sCount.node, sCats.node, sUpd.node)
       ),
       el(
         "div",
         { className: "toolbar" },
         search,
-        el("div", { className: "actions" }, statusEl, button("เพิ่มหัวข้อ", { ico: "plus", onclick: addSection }), saveBtn)
+        el("div", { className: "actions" }, button("เพิ่มหัวข้อ", { cls: "primary", ico: "plus", onclick: () => openTopicDialog() }))
       )
     );
     if (!persistent) {
@@ -359,7 +361,6 @@
     app.replaceChildren(wrap);
     query = "";
     renderList();
-    setDirty(false);
   }
 
   async function start() {
