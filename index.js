@@ -1,13 +1,13 @@
 const crypto = require("crypto");
+const fs = require("fs");
+const path = require("path");
 const express = require("express");
 
 const {
   LINE_CHANNEL_SECRET,
   LINE_CHANNEL_ACCESS_TOKEN,
   GEMINI_API_KEY,
-  DATA_SOURCE_URLS, // comma-separated list of web pages / published docs
   GEMINI_MODEL = "gemini-2.5-flash",
-  CACHE_TTL_MINUTES = "30",
   PORT = 3000,
 } = process.env;
 
@@ -17,7 +17,6 @@ const missingEnv = Object.entries({
   LINE_CHANNEL_SECRET,
   LINE_CHANNEL_ACCESS_TOKEN,
   GEMINI_API_KEY,
-  DATA_SOURCE_URLS,
 })
   .filter(([, v]) => !v)
   .map(([k]) => k);
@@ -32,52 +31,27 @@ const SYSTEM_PROMPT = `คุณคือพนักงานตำแหน่
 - หากข้อมูลที่ให้มาไม่เกี่ยวข้องกับคำถาม ให้ตอบว่า "${NOT_FOUND_REPLY}"
 - ห้ามคิดคำตอบขึ้นมาเองหรือใช้ความรู้ภายนอกที่ไม่อยู่ในข้อมูลที่ให้มา`;
 
-// ---------- Data source (fetched from the web, cached) ----------
+// ---------- Data source (local files in ./knowledge, loaded at startup) ----------
 
-function htmlToText(html) {
-  return html
-    .replace(/<(script|style|noscript)[\s\S]*?<\/\1>/gi, " ")
-    .replace(/<br\s*\/?>|<\/(p|div|li|tr|h[1-6])>/gi, "\n")
-    .replace(/<[^>]+>/g, " ")
-    .replace(/&nbsp;/g, " ")
-    .replace(/&amp;/g, "&")
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">")
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;/g, "'")
-    .replace(/[ \t]+/g, " ")
-    .replace(/\n\s*\n+/g, "\n")
-    .trim();
+const KNOWLEDGE_DIR = path.join(__dirname, "knowledge");
+
+function loadKnowledge() {
+  try {
+    return fs
+      .readdirSync(KNOWLEDGE_DIR)
+      .filter((f) => /\.(md|txt)$/i.test(f))
+      .sort()
+      .map((f) => `### ${f}\n${fs.readFileSync(path.join(KNOWLEDGE_DIR, f), "utf8")}`)
+      .join("\n\n")
+      .slice(0, MAX_CONTEXT_CHARS);
+  } catch (err) {
+    console.error("Failed to read knowledge dir:", err.message);
+    return "";
+  }
 }
 
-let cache = { text: "", at: 0 };
-
-async function loadKnowledge() {
-  const ttl = Number(CACHE_TTL_MINUTES) * 60 * 1000;
-  if (cache.text && Date.now() - cache.at < ttl) return cache.text;
-
-  const urls = (DATA_SOURCE_URLS || "").split(",").map((u) => u.trim()).filter(Boolean);
-  const parts = await Promise.all(
-    urls.map(async (url) => {
-      try {
-        const res = await fetch(url);
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const body = await res.text();
-        const type = res.headers.get("content-type") || "";
-        const text = type.includes("html") ? htmlToText(body) : body;
-        return `### แหล่งข้อมูล: ${url}\n${text}`;
-      } catch (err) {
-        console.error(`Failed to fetch ${url}:`, err.message);
-        return "";
-      }
-    })
-  );
-
-  const text = parts.filter(Boolean).join("\n\n").slice(0, MAX_CONTEXT_CHARS);
-  if (text) cache = { text, at: Date.now() };
-  // If refresh failed, fall back to stale cache
-  return text || cache.text;
-}
+const knowledge = loadKnowledge();
+if (!knowledge) console.error("No knowledge loaded: add .md/.txt files to ./knowledge");
 
 // ---------- Gemini ----------
 
@@ -146,7 +120,6 @@ async function reply(replyToken, text) {
 async function handleEvent(event) {
   if (event.type !== "message" || event.message.type !== "text") return;
   try {
-    const knowledge = await loadKnowledge();
     if (!knowledge) return reply(event.replyToken, NOT_FOUND_REPLY);
     const answer = await askGemini(event.message.text, knowledge);
     await reply(event.replyToken, answer);
