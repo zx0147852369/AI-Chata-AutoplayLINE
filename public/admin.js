@@ -202,7 +202,7 @@
     const st = await api("/api/admin/status");
     persistent = st.persistent;
     if (!st.loggedIn) return showLogin(st.enabled);
-    const data = await api("/api/rules");
+    const data = await api("/api/admin/rules");
     sections = data.sections || [];
     showEditor();
   }

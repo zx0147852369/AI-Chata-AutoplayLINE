@@ -184,13 +184,12 @@ app.post("/webhook", express.raw({ type: "*/*" }), (req, res) => {
 
 const json = express.json({ limit: "2mb" });
 
-// Public content
-app.get("/api/rules", (_req, res) => {
-  res.set("Cache-Control", "no-cache");
+// Admin API (rules are not publicly readable; employees ask through LINE)
+app.get("/api/admin/rules", requireAdmin, (_req, res) => {
+  res.set("Cache-Control", "no-store");
   res.json(store.get());
 });
 
-// Admin API
 app.get("/api/admin/status", (req, res) =>
   res.json({
     enabled: Boolean(ADMIN_PASSWORD),
@@ -231,7 +230,8 @@ app.put("/api/admin/rules", requireAdmin, json, (req, res) => {
   }
 });
 
+app.get("/", (_req, res) => res.redirect("/admin"));
 app.get("/admin", (_req, res) => res.sendFile(path.join(__dirname, "public", "admin.html")));
-app.use(express.static(path.join(__dirname, "public"), { extensions: ["html"] }));
+app.use(express.static(path.join(__dirname, "public"), { index: false }));
 
 app.listen(PORT, "0.0.0.0", () => console.log(`Listening on ${PORT}`));
