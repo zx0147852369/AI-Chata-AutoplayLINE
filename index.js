@@ -9,20 +9,29 @@ const {
   GEMINI_API_KEY,
   ADMIN_PASSWORD,
   GEMINI_MODEL = "gemini-2.5-flash",
+  // Optional OpenAI-compatible provider (takes priority over Gemini when set)
+  LLM_BASE_URL, // e.g. https://ai.thirx.com/v1
+  LLM_API_KEY,
+  LLM_MODEL = "qwen3.8-27b",
   PORT = 3000,
 } = process.env;
+
+const useOpenAI = Boolean(LLM_BASE_URL && LLM_API_KEY);
+const provider = useOpenAI ? "openai-compatible" : GEMINI_API_KEY ? "gemini" : "none";
+const llmConfigured = provider !== "none";
 
 // Don't exit on missing config: keep the server up so Railway's health check
 // passes and /health can report what is missing.
 const missingEnv = Object.entries({
   LINE_CHANNEL_SECRET,
   LINE_CHANNEL_ACCESS_TOKEN,
-  GEMINI_API_KEY,
   ADMIN_PASSWORD,
 })
   .filter(([, v]) => !v)
   .map(([k]) => k);
+if (!llmConfigured) missingEnv.push("LLM_BASE_URL+LLM_API_KEY (or GEMINI_API_KEY)");
 if (missingEnv.length) console.error(`Missing env vars: ${missingEnv.join(", ")}`);
+console.log(`LLM provider: ${provider}${useOpenAI ? ` (model ${LLM_MODEL})` : ""}`);
 
 const NOT_FOUND_REPLY = "ยังไม่มีข้อมูลนี้ค่ะ";
 const MAX_CONTEXT_CHARS = 300000;
@@ -70,6 +79,38 @@ async function askGemini(question, knowledge) {
   return answer || NOT_FOUND_REPLY;
 }
 
+// OpenAI-compatible /chat/completions (works with most LLM gateways)
+async function askOpenAI(question, knowledge) {
+  const res = await fetch(`${LLM_BASE_URL.replace(/\/+$/, "")}/chat/completions`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${LLM_API_KEY}`,
+    },
+    body: JSON.stringify({
+      model: LLM_MODEL,
+      temperature: 0.2,
+      messages: [
+        { role: "system", content: SYSTEM_PROMPT },
+        {
+          role: "user",
+          content: `ข้อมูลของบริษัท:\n"""\n${knowledge}\n"""\n\nคำถามจากพนักงาน: ${question}`,
+        },
+      ],
+    }),
+    signal: AbortSignal.timeout(25000),
+  });
+  if (!res.ok) throw new Error(`LLM ${res.status}: ${await res.text()}`);
+  const data = await res.json();
+  const answer = data.choices?.[0]?.message?.content
+    ?.replace(/<think>[\s\S]*?<\/think>/gi, "") // some reasoning models inline their thoughts
+    .trim();
+  return answer || NOT_FOUND_REPLY;
+}
+
+const askLLM = (question, knowledge) =>
+  useOpenAI ? askOpenAI(question, knowledge) : askGemini(question, knowledge);
+
 // ---------- LINE ----------
 
 function verifySignature(rawBody, signature) {
@@ -103,7 +144,7 @@ async function handleEvent(event) {
   try {
     const knowledge = store.toKnowledge(MAX_CONTEXT_CHARS);
     if (!knowledge) return reply(event.replyToken, NOT_FOUND_REPLY);
-    const answer = await askGemini(event.message.text, knowledge);
+    const answer = await askLLM(event.message.text, knowledge);
     await reply(event.replyToken, answer);
   } catch (err) {
     console.error("handleEvent error:", err);
@@ -162,11 +203,11 @@ const app = express();
 app.set("trust proxy", 1);
 app.disable("x-powered-by");
 
-app.get("/health", (_req, res) => res.json({ ok: true, missingEnv }));
+app.get("/health", (_req, res) => res.json({ ok: true, provider, missingEnv }));
 
 // LINE webhook (needs the raw body for signature verification)
 app.post("/webhook", express.raw({ type: "*/*" }), (req, res) => {
-  if (!LINE_CHANNEL_SECRET || !LINE_CHANNEL_ACCESS_TOKEN || !GEMINI_API_KEY) {
+  if (!LINE_CHANNEL_SECRET || !LINE_CHANNEL_ACCESS_TOKEN || !llmConfigured) {
     return res.status(503).send("Server not configured");
   }
   if (!verifySignature(req.body, req.get("x-line-signature"))) {

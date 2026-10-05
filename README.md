@@ -12,7 +12,9 @@
 1. Push โปรเจกต์ขึ้น GitHub แล้ว Railway → New Project → Deploy from GitHub repo
 2. ตั้ง Variables (ดู `.env.example`):
    - `LINE_CHANNEL_SECRET`, `LINE_CHANNEL_ACCESS_TOKEN` จาก LINE Developers Console
-   - `GEMINI_API_KEY` จาก Google AI Studio
+   - LLM อย่างใดอย่างหนึ่ง:
+     - API แบบ OpenAI-compatible: `LLM_BASE_URL` (เช่น `https://ai.thirx.com/v1`), `LLM_API_KEY`, `LLM_MODEL` (ถ้าตั้ง จะใช้ตัวนี้ก่อน)
+     - หรือ Gemini: `GEMINI_API_KEY` จาก Google AI Studio
    - `ADMIN_PASSWORD` รหัสผ่านเข้าหน้า `/admin`
    - `DATA_DIR=/data`
 3. **เพิ่ม Volume** (ที่เก็บข้อมูลถาวร): ที่ service กด Add Volume (หรือคลิกขวาบนพื้นที่ canvas → Volume) แล้วตั้ง Mount path เป็น `/data`
