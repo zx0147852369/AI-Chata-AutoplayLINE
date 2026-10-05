@@ -11,17 +11,17 @@ const {
   PORT = 3000,
 } = process.env;
 
-for (const [k, v] of Object.entries({
+// Don't exit on missing config: keep the server up so Railway's health check
+// passes and "/" can report what is missing.
+const missingEnv = Object.entries({
   LINE_CHANNEL_SECRET,
   LINE_CHANNEL_ACCESS_TOKEN,
   GEMINI_API_KEY,
   DATA_SOURCE_URLS,
-})) {
-  if (!v) {
-    console.error(`Missing env var: ${k}`);
-    process.exit(1);
-  }
-}
+})
+  .filter(([, v]) => !v)
+  .map(([k]) => k);
+if (missingEnv.length) console.error(`Missing env vars: ${missingEnv.join(", ")}`);
 
 const NOT_FOUND_REPLY = "ยังไม่มีข้อมูลนี้ค่ะ";
 const MAX_CONTEXT_CHARS = 300000;
@@ -56,7 +56,7 @@ async function loadKnowledge() {
   const ttl = Number(CACHE_TTL_MINUTES) * 60 * 1000;
   if (cache.text && Date.now() - cache.at < ttl) return cache.text;
 
-  const urls = DATA_SOURCE_URLS.split(",").map((u) => u.trim()).filter(Boolean);
+  const urls = (DATA_SOURCE_URLS || "").split(",").map((u) => u.trim()).filter(Boolean);
   const parts = await Promise.all(
     urls.map(async (url) => {
       try {
@@ -158,9 +158,16 @@ async function handleEvent(event) {
 
 const app = express();
 
-app.get("/", (_req, res) => res.send("HR LINE chatbot is running"));
+app.get("/", (_req, res) =>
+  res.send(
+    missingEnv.length
+      ? `HR LINE chatbot is up, but missing env vars: ${missingEnv.join(", ")}`
+      : "HR LINE chatbot is running"
+  )
+);
 
 app.post("/webhook", express.raw({ type: "*/*" }), (req, res) => {
+  if (missingEnv.length) return res.status(503).send("Server not configured");
   if (!verifySignature(req.body, req.get("x-line-signature"))) {
     return res.status(401).send("Invalid signature");
   }
@@ -174,4 +181,4 @@ app.post("/webhook", express.raw({ type: "*/*" }), (req, res) => {
   events.forEach((e) => handleEvent(e));
 });
 
-app.listen(PORT, () => console.log(`Listening on ${PORT}`));
+app.listen(PORT, "0.0.0.0", () => console.log(`Listening on ${PORT}`));
