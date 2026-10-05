@@ -16,6 +16,14 @@ const {
   PORT = 3000,
 } = process.env;
 
+const MIN_ADMIN_PASSWORD = 8;
+const adminEnabled = Boolean(ADMIN_PASSWORD && ADMIN_PASSWORD.length >= MIN_ADMIN_PASSWORD);
+const adminReason = !ADMIN_PASSWORD
+  ? "ยังไม่ได้ตั้งค่า ADMIN_PASSWORD ใน Railway Variables"
+  : !adminEnabled
+    ? `ADMIN_PASSWORD สั้นเกินไป กรุณาตั้งอย่างน้อย ${MIN_ADMIN_PASSWORD} ตัวอักษร`
+    : "";
+
 const useOpenAI = Boolean(LLM_BASE_URL && LLM_API_KEY);
 const provider = useOpenAI ? "openai-compatible" : GEMINI_API_KEY ? "gemini" : "none";
 const llmConfigured = provider !== "none";
@@ -25,10 +33,10 @@ const llmConfigured = provider !== "none";
 const missingEnv = Object.entries({
   LINE_CHANNEL_SECRET,
   LINE_CHANNEL_ACCESS_TOKEN,
-  ADMIN_PASSWORD,
 })
   .filter(([, v]) => !v)
   .map(([k]) => k);
+if (adminReason) missingEnv.push(adminReason);
 if (!llmConfigured) missingEnv.push("LLM_BASE_URL+LLM_API_KEY (or GEMINI_API_KEY)");
 if (missingEnv.length) console.error(`Missing env vars: ${missingEnv.join(", ")}`);
 console.log(`LLM provider: ${provider}${useOpenAI ? ` (model ${LLM_MODEL})` : ""}`);
@@ -172,7 +180,7 @@ function readCookie(req, name) {
 }
 
 function isAdmin(req) {
-  if (!ADMIN_PASSWORD) return false;
+  if (!adminEnabled) return false;
   const [exp, sig] = readCookie(req, "hr_session").split(".");
   if (!exp || !sig || Number(exp) < Date.now()) return false;
   return safeEqual(sig, sign(exp));
@@ -233,14 +241,15 @@ app.get("/api/admin/rules", requireAdmin, (_req, res) => {
 
 app.get("/api/admin/status", (req, res) =>
   res.json({
-    enabled: Boolean(ADMIN_PASSWORD),
+    enabled: adminEnabled,
+    reason: adminReason,
     loggedIn: isAdmin(req),
     persistent: store.persistent,
   })
 );
 
 app.post("/api/admin/login", json, (req, res) => {
-  if (!ADMIN_PASSWORD) return res.status(503).json({ error: "ยังไม่ได้ตั้งรหัสผ่านผู้ดูแล (ADMIN_PASSWORD)" });
+  if (!adminEnabled) return res.status(503).json({ error: adminReason });
   if (tooManyAttempts(req.ip)) return res.status(429).json({ error: "ลองหลายครั้งเกินไป กรุณารอ 15 นาที" });
   if (!safeEqual(req.body?.password ?? "", ADMIN_PASSWORD)) {
     recordFailure(req.ip);

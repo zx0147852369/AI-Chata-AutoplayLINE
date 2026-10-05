@@ -1,7 +1,9 @@
 const fs = require("fs");
 const path = require("path");
 
-const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, "data");
+// Railway sets RAILWAY_VOLUME_MOUNT_PATH automatically when a volume is attached
+const VOLUME_DIR = process.env.DATA_DIR || process.env.RAILWAY_VOLUME_MOUNT_PATH;
+const DATA_DIR = VOLUME_DIR || path.join(__dirname, "data");
 const FILE = path.join(DATA_DIR, "rules.json");
 
 const LIMITS = { sections: 200, title: 200, category: 80, body: 20000 };
@@ -48,4 +50,4 @@ function toKnowledge(maxChars) {
     .slice(0, maxChars);
 }
 
-module.exports = { get, save, toKnowledge, persistent: Boolean(process.env.DATA_DIR) };
+module.exports = { get, save, toKnowledge, persistent: Boolean(VOLUME_DIR) };

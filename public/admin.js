@@ -43,13 +43,13 @@
   });
 
   // ---------- Login ----------
-  function showLogin(enabled) {
+  function showLogin(enabled, reason) {
     const err = el("div", { className: "error", role: "alert" });
     const pw = el("input", { className: "input", type: "password", autocomplete: "current-password", required: true });
     const btn = el("button", { className: "btn primary", type: "submit", textContent: "เข้าสู่ระบบ" });
     btn.style.width = "100%";
     pw.disabled = btn.disabled = !enabled;
-    if (!enabled) err.textContent = "ยังไม่ได้ตั้งค่า ADMIN_PASSWORD ใน Railway Variables";
+    if (!enabled) err.textContent = reason || "ยังไม่ได้ตั้งค่า ADMIN_PASSWORD ใน Railway Variables";
 
     const form = el(
       "form",
@@ -201,7 +201,7 @@
   async function start() {
     const st = await api("/api/admin/status");
     persistent = st.persistent;
-    if (!st.loggedIn) return showLogin(st.enabled);
+    if (!st.loggedIn) return showLogin(st.enabled, st.reason);
     const data = await api("/api/admin/rules");
     sections = data.sections || [];
     showEditor();
