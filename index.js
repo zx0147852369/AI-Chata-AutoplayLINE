@@ -56,74 +56,85 @@ const IMAGE_RULE = `
 - แต่ละหัวข้อมีเลขกำกับ เช่น #3 ท้ายคำตอบให้ขึ้นบรรทัดใหม่แล้วใส่ [[ใช้หัวข้อ: เลขหัวข้อที่ใช้ตอบ คั่นด้วยจุลภาค]] เช่น [[ใช้หัวข้อ: 1,3]] ถ้าไม่ได้ใช้หัวข้อใดเลยให้ใส่ [[ใช้หัวข้อ: -]]`;
 const systemPrompt = (hasImages) => SYSTEM_PROMPT + (hasImages ? IMAGE_RULE : "");
 
-// ---------- Gemini ----------
+// ---------- LLM (one call path shared by the LINE bot and the admin "AI write" helper) ----------
 
-async function askGemini(question, knowledge, system) {
+async function completeGemini(system, user, { temperature, timeoutMs }) {
   const res = await fetch(
     `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`,
     {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-goog-api-key": GEMINI_API_KEY,
-      },
+      headers: { "Content-Type": "application/json", "x-goog-api-key": GEMINI_API_KEY },
       body: JSON.stringify({
         systemInstruction: { parts: [{ text: system }] },
-        contents: [
-          {
-            role: "user",
-            parts: [
-              {
-                text: `ข้อมูลของบริษัท:\n"""\n${knowledge}\n"""\n\nคำถามจากพนักงาน: ${question}`,
-              },
-            ],
-          },
-        ],
-        generationConfig: { temperature: 0.2 },
+        contents: [{ role: "user", parts: [{ text: user }] }],
+        generationConfig: { temperature },
       }),
-      signal: AbortSignal.timeout(25000),
+      signal: AbortSignal.timeout(timeoutMs),
     }
   );
   if (!res.ok) throw new Error(`Gemini ${res.status}: ${await res.text()}`);
   const data = await res.json();
-  const answer = data.candidates?.[0]?.content?.parts
-    ?.map((p) => p.text)
-    .join("")
-    .trim();
-  return answer || NOT_FOUND_REPLY;
+  return (data.candidates?.[0]?.content?.parts?.map((p) => p.text).join("") || "").trim();
 }
 
 // OpenAI-compatible /chat/completions (works with most LLM gateways)
-async function askOpenAI(question, knowledge, system) {
+async function completeOpenAI(system, user, { temperature, timeoutMs }) {
   const res = await fetch(`${LLM_BASE_URL.replace(/\/+$/, "")}/chat/completions`, {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${LLM_API_KEY}`,
-    },
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${LLM_API_KEY}` },
     body: JSON.stringify({
       model: LLM_MODEL,
-      temperature: 0.2,
+      temperature,
       messages: [
         { role: "system", content: system },
-        {
-          role: "user",
-          content: `ข้อมูลของบริษัท:\n"""\n${knowledge}\n"""\n\nคำถามจากพนักงาน: ${question}`,
-        },
+        { role: "user", content: user },
       ],
     }),
-    signal: AbortSignal.timeout(25000),
+    signal: AbortSignal.timeout(timeoutMs),
   });
   if (!res.ok) throw new Error(`LLM ${res.status}: ${await res.text()}`);
   const data = await res.json();
-  const answer = data.choices?.[0]?.message?.content
-    ?.replace(/<think>[\s\S]*?<\/think>/gi, "") // some reasoning models inline their thoughts
+  return (data.choices?.[0]?.message?.content || "")
+    .replace(/<think>[\s\S]*?<\/think>/gi, "") // some reasoning models inline their thoughts
     .trim();
+}
+
+const complete = (system, user, opts) =>
+  (useOpenAI ? completeOpenAI : completeGemini)(system, user, { temperature: 0.2, timeoutMs: 25000, ...opts });
+
+// Employee question -> answer from the company knowledge
+async function askLLM(question, knowledge, system) {
+  const answer = await complete(system, `ข้อมูลของบริษัท:\n"""\n${knowledge}\n"""\n\nคำถามจากพนักงาน: ${question}`);
   return answer || NOT_FOUND_REPLY;
 }
 
-const askLLM = (question, knowledge, system) =>
-  useOpenAI ? askOpenAI(question, knowledge, system) : askGemini(question, knowledge, system);
+// ---------- Admin "AI write": draft a topic's text from the HR admin's notes ----------
+
+const DRAFT_PROMPT = `คุณเป็นผู้ช่วยฝ่าย HR ที่ช่วยร่างข้อความกฎเกณฑ์/ระเบียบของบริษัทเป็นภาษาไทย เพื่อให้ผู้ดูแลตรวจทานก่อนนำไปใช้ตอบพนักงาน
+- เขียนจากข้อมูลที่ผู้ใช้ให้เท่านั้น ห้ามแต่งตัวเลข จำนวนวัน เงื่อนไข หรือสวัสดิการที่ผู้ใช้ไม่ได้ระบุ
+- หากข้อมูลที่จำเป็นขาดไป ให้ใส่ตัวแทนในรูปแบบ [ระบุ: ...] เพื่อให้ผู้ดูแลกรอกเอง
+- ใช้ภาษาที่ชัดเจน สุภาพ กระชับ แบ่งย่อหน้าตามความเหมาะสม และใช้ "- " นำหน้าบรรทัดสำหรับรายการ
+- ตอบเฉพาะเนื้อหาที่นำไปใช้ได้เลย ไม่ต้องมีคำอธิบายเพิ่มหรือหัวข้อซ้ำ ห้ามใช้ markdown (เช่น ** หรือ #) และห้ามใช้อีโมจิ`;
+
+function cleanDraft(text) {
+  return text
+    .replace(/^```[a-z]*\n?|```$/gim, "")
+    .replace(/\*\*(.+?)\*\*/g, "$1")
+    .replace(/^#{1,6}\s+/gm, "")
+    .replace(/^\s*[*•]\s+/gm, "- ")
+    .trim();
+}
+
+async function draftTopic({ instruction, category, title, current }) {
+  const parts = [];
+  if (category) parts.push(`หมวดหมู่: ${category}`);
+  if (title) parts.push(`หัวข้อ: ${title}`);
+  if (current) parts.push(`เนื้อหาเดิม (ใช้เป็นฐานและปรับปรุงตามคำสั่ง):\n"""\n${current}\n"""`);
+  parts.push(`ข้อมูล/คำสั่งจากผู้ดูแล:\n"""\n${instruction}\n"""`);
+  const out = cleanDraft(await complete(DRAFT_PROMPT, parts.join("\n\n"), { temperature: 0.4, timeoutMs: 45000 }));
+  if (!out) throw new Error("AI ไม่ได้ส่งข้อความกลับมา ลองใหม่อีกครั้ง");
+  return out.slice(0, 20000);
+}
 
 // Split "[[ใช้หัวข้อ: 1,3]]" off the answer and collect those topics' images
 const USED_TAG = /\[\[\s*ใช้หัวข้อ\s*:([^\]]*)\]\]/g;
@@ -317,6 +328,34 @@ app.post("/api/admin/image", requireAdmin, express.raw({ type: ["image/jpeg", "i
 app.delete("/api/admin/image/:file", requireAdmin, (req, res) => {
   store.discardUploaded(req.params.file);
   res.json({ ok: true });
+});
+
+// AI draft: admin only, capped per IP so a stolen session cannot burn the LLM quota
+const genUse = new Map(); // ip -> { count, resetAt }
+const GEN_LIMIT_PER_HOUR = 30;
+app.post("/api/admin/generate", requireAdmin, json, async (req, res) => {
+  if (!llmConfigured) return res.status(503).json({ error: "ยังไม่ได้ตั้งค่า LLM (LLM_BASE_URL + LLM_API_KEY หรือ GEMINI_API_KEY)" });
+  const now = Date.now();
+  const u = genUse.get(req.ip);
+  if (u && u.resetAt > now && u.count >= GEN_LIMIT_PER_HOUR) {
+    return res.status(429).json({ error: "ใช้ AI ช่วยเขียนบ่อยเกินไป กรุณารอสักครู่" });
+  }
+  const instruction = String(req.body?.instruction || "").trim().slice(0, 4000);
+  if (!instruction) return res.status(400).json({ error: "กรุณาบอก AI ว่าต้องการให้เขียนเรื่องอะไร" });
+  if (!u || u.resetAt <= now) genUse.set(req.ip, { count: 1, resetAt: now + 60 * 60 * 1000 });
+  else u.count += 1;
+  try {
+    const text = await draftTopic({
+      instruction,
+      category: String(req.body?.category || "").trim().slice(0, 80),
+      title: String(req.body?.title || "").trim().slice(0, 200),
+      current: req.body?.useCurrent ? String(req.body?.current || "").trim().slice(0, 20000) : "",
+    });
+    res.json({ text });
+  } catch (err) {
+    console.error("generate failed:", err.message);
+    res.status(502).json({ error: err.message.startsWith("AI ") ? err.message : "เรียก AI ไม่สำเร็จ กรุณาลองใหม่อีกครั้ง" });
+  }
 });
 
 app.post("/api/admin/section", requireAdmin, json, (req, res) => respond(res, () => store.upsert(req.body)));

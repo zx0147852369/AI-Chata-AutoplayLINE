@@ -368,3 +368,21 @@ label.field { display: block; font-size: 13.5px; font-weight: 600; color: var(--
 .images-field > .hint:last-child { display: block; margin: 8px 0 0; }
 .thumbs-row { display: flex; gap: 6px; margin-top: 8px; }
 .thumbs-row img { width: 44px; height: 44px; object-fit: cover; border-radius: 8px; border: 1px solid var(--line); }
+
+/* ---------- AI helper ---------- */
+.ai-row { margin: 10px 0 12px; }
+.ai-panel {
+  margin: 0 0 16px;
+  padding: 16px;
+  background: #f3faf9;
+  border: 1px solid #cfe9e5;
+  border-radius: 14px;
+}
+.ai-panel .field { margin: 0; }
+.ai-panel .textarea { margin-top: 6px; }
+.ai-panel .hint { margin: 10px 0 0; }
+.ai-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-top: 12px; }
+.ai-actions .hint { margin: 0; }
+.check { display: flex; align-items: center; gap: 8px; margin-top: 10px; font-size: 14px; color: var(--muted); }
+.check input { width: 16px; height: 16px; accent-color: var(--accent); }
+.check input:disabled + * , .check:has(input:disabled) { opacity: 0.55; }

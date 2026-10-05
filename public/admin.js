@@ -22,6 +22,7 @@
     trash: '<path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/>',
     edit: '<path d="M4 20h4L19 9l-4-4L4 16z"/><path d="M13.5 6.5l4 4"/>',
     close: '<path d="M6 6l12 12M18 6L6 18"/>',
+    sparkle: '<path d="M11 3l1.9 5.1L18 10l-5.1 1.9L11 17l-1.9-5.1L4 10l5.1-1.9z"/><path d="M19 15l.8 2.2L22 18l-2.2.8L19 21l-.8-2.2L16 18l2.2-.8z"/>',
     image: '<rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="9" cy="10" r="1.6"/><path d="M21 16l-5-5-8 9"/>',
     eye: '<path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/>',
     eyeOff: '<path d="M3 3l18 18M10.6 5.1A10 10 0 0 1 12 5c6.5 0 10 7 10 7a17 17 0 0 1-3.2 4M6.5 6.6C3.8 8.4 2 12 2 12s3.5 7 10 7c1.7 0 3.2-.4 4.5-1"/>',
@@ -210,6 +211,78 @@
     const cancel = button("ยกเลิก", { onclick: close });
     const saveBtn = button(editing ? "บันทึกการแก้ไข" : "บันทึกหัวข้อ", { cls: "primary", type: "submit" });
 
+    // AI helper: drafts the detail text from short notes; the admin reviews before saving
+    const aiToggle = button("ให้ AI ช่วยเขียน", { ico: "sparkle", cls: "small" });
+    const aiPrompt = el("textarea", {
+      className: "textarea",
+      placeholder: "บอก AI เป็นข้อมูลดิบสั้นๆ เช่น ลาพักร้อน 10 วันต่อปี แจ้งล่วงหน้าอย่างน้อย 3 วัน ลาติดกันไม่เกิน 5 วัน",
+      maxLength: 4000,
+    });
+    aiPrompt.style.minHeight = "84px";
+    const useCurrent = el("input", { type: "checkbox" });
+    const aiGo = button("สร้างข้อความ", { ico: "sparkle", cls: "primary small" });
+    const aiUndo = button("เลิกทำ", { cls: "small" });
+    aiUndo.hidden = true;
+    const aiStatus = el("span", { className: "hint" });
+    const aiPanel = el(
+      "div",
+      { className: "ai-panel", hidden: true },
+      el("label", { className: "field" }, "บอก AI ว่าต้องการอะไร", aiPrompt),
+      el("label", { className: "check" }, useCurrent, "ใช้เนื้อหาในช่องรายละเอียดเป็นฐาน (ให้ AI ปรับปรุงของเดิม)"),
+      el("div", { className: "ai-actions" }, aiGo, aiUndo, aiStatus),
+      el("p", { className: "hint", textContent: "AI อาจผิดพลาดได้ ตรวจทานตัวเลขและเงื่อนไขทุกครั้งก่อนบันทึก ข้อความที่ขึ้นเป็น [ระบุ: ...] คือข้อมูลที่ AI ไม่มี ต้องกรอกเอง" })
+    );
+    const syncUseCurrent = () => {
+      const has = body.value.trim().length > 0;
+      useCurrent.disabled = !has;
+      if (!has) useCurrent.checked = false;
+    };
+    body.addEventListener("input", syncUseCurrent);
+    aiToggle.onclick = () => {
+      aiPanel.hidden = !aiPanel.hidden;
+      if (!aiPanel.hidden) { syncUseCurrent(); aiPrompt.focus(); }
+    };
+    let previousBody = null;
+    aiGo.onclick = async () => {
+      err.textContent = "";
+      const instruction = aiPrompt.value.trim();
+      if (!instruction) {
+        err.textContent = "กรุณาบอก AI ว่าต้องการให้เขียนเรื่องอะไร";
+        aiPrompt.focus();
+        return;
+      }
+      aiGo.disabled = true;
+      aiStatus.textContent = "AI กำลังเขียน อาจใช้เวลาสักครู่...";
+      try {
+        const data = await api("/api/admin/generate", {
+          method: "POST",
+          body: { instruction, category: category.value, title: title.value, current: body.value, useCurrent: useCurrent.checked },
+        });
+        previousBody = body.value;
+        body.value = data.text.slice(0, MAX_BODY);
+        showCount();
+        syncUseCurrent();
+        aiUndo.hidden = false;
+        aiStatus.textContent = "สร้างข้อความแล้ว กรุณาตรวจทานก่อนบันทึก";
+      } catch (ex) {
+        aiStatus.textContent = "";
+        if (ex.status === 401) { dlg.close(); return showLogin(true); }
+        err.textContent = ex.message;
+      } finally {
+        aiGo.disabled = false;
+      }
+    };
+    aiUndo.onclick = () => {
+      if (previousBody !== null) {
+        body.value = previousBody;
+        previousBody = null;
+        showCount();
+        syncUseCurrent();
+      }
+      aiUndo.hidden = true;
+      aiStatus.textContent = "";
+    };
+
     // Image picker
     const thumbs = el("div", { className: "thumbs" });
     const fileInput = el("input", { type: "file", accept: "image/*", multiple: true, hidden: true });
@@ -271,6 +344,8 @@
       el("label", { className: "field" }, "หัวข้อ", title),
       el("label", { className: "field" }, "รายละเอียด", body),
       el("div", { className: "modal-meta" }, el("span", { className: "hint", textContent: "ขึ้นบรรทัดใหม่เพื่อแยกย่อหน้า" }), counter),
+      el("div", { className: "ai-row" }, aiToggle),
+      aiPanel,
       el(
         "div",
         { className: "field images-field" },
