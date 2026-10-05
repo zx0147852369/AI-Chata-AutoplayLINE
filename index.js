@@ -4,18 +4,22 @@ const express = require("express");
 const store = require("./store");
 
 const {
-  LINE_CHANNEL_SECRET,
-  LINE_CHANNEL_ACCESS_TOKEN,
-  GEMINI_API_KEY,
   ADMIN_PASSWORD,
   GEMINI_MODEL = "gemini-2.5-flash",
   // Optional OpenAI-compatible provider (takes priority over Gemini when set)
   LLM_BASE_URL, // e.g. https://ai.thirx.com/v1
-  LLM_API_KEY,
   LLM_MODEL = "qwen3.8-27b",
   PUBLIC_BASE_URL, // optional: override the https origin used for image links sent to LINE
   PORT = 3000,
 } = process.env;
+
+// Keys and tokens never contain whitespace, but copy/paste often adds a space or line break
+// in the middle. Strip it so a slightly dirty paste still works (the status page also warns).
+const strip = (v) => (v ? v.replace(/\s+/g, "") : v);
+const LINE_CHANNEL_SECRET = strip(process.env.LINE_CHANNEL_SECRET);
+const LINE_CHANNEL_ACCESS_TOKEN = strip(process.env.LINE_CHANNEL_ACCESS_TOKEN);
+const GEMINI_API_KEY = strip(process.env.GEMINI_API_KEY);
+const LLM_API_KEY = strip(process.env.LLM_API_KEY);
 
 const MIN_ADMIN_PASSWORD = 8;
 const adminEnabled = Boolean(ADMIN_PASSWORD && ADMIN_PASSWORD.length >= MIN_ADMIN_PASSWORD);
@@ -382,8 +386,8 @@ app.get("/api/admin/line", requireAdmin, (req, res) => {
     // a long-lived Channel access token is a long base64-like string
     secretFormatOk: /^[0-9a-f]{32}$/i.test((LINE_CHANNEL_SECRET || "").trim()),
     tokenFormatOk: (LINE_CHANNEL_ACCESS_TOKEN || "").trim().length >= 100,
-    secretHasSpaces: Boolean(LINE_CHANNEL_SECRET) && LINE_CHANNEL_SECRET !== LINE_CHANNEL_SECRET.trim(),
-    tokenHasSpaces: Boolean(LINE_CHANNEL_ACCESS_TOKEN) && LINE_CHANNEL_ACCESS_TOKEN !== LINE_CHANNEL_ACCESS_TOKEN.trim(),
+    secretHasSpaces: /\s/.test(process.env.LINE_CHANNEL_SECRET || ""),
+    tokenHasSpaces: /\s/.test(process.env.LINE_CHANNEL_ACCESS_TOKEN || ""),
     topics: store.get().sections.length,
     startedAt: serverStartedAt,
     stats: lineStats,

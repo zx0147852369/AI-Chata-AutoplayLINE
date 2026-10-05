@@ -646,7 +646,7 @@
       out.push({ bad: true, text: "ค่า LINE_CHANNEL_ACCESS_TOKEN สั้นผิดปกติ Channel access token (long-lived) เป็นสตริงยาวมาก ตรวจว่าคัดลอกมาครบ" });
     }
     if (d.secretHasSpaces || d.tokenHasSpaces) {
-      out.push({ bad: true, text: "ค่า LINE ที่ตั้งไว้มีช่องว่างหรือขึ้นบรรทัดใหม่ติดหัวท้าย ให้ลบแล้ววางใหม่ให้เหลือเฉพาะตัวค่า" });
+      out.push({ bad: true, text: "ค่า LINE ที่ตั้งไว้มีช่องว่างหรือขึ้นบรรทัดใหม่ปนอยู่ ระบบตัดออกให้อัตโนมัติแล้ว แต่ควรลบแล้ววางใหม่ให้สะอาด (ใช้ปุ่มคัดลอกข้างช่องใน LINE Developers แทนการลากคลุมข้อความ)" });
     }
     if (s.badSignature > 0) {
       out.push({
