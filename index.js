@@ -378,6 +378,12 @@ app.get("/api/admin/line", requireAdmin, (req, res) => {
     webhookUrl: `${base}/webhook`,
     secretSet: Boolean(LINE_CHANNEL_SECRET),
     tokenSet: Boolean(LINE_CHANNEL_ACCESS_TOKEN),
+    // Shape checks only (the values themselves are never sent): a Channel secret is 32 hex characters,
+    // a long-lived Channel access token is a long base64-like string
+    secretFormatOk: /^[0-9a-f]{32}$/i.test((LINE_CHANNEL_SECRET || "").trim()),
+    tokenFormatOk: (LINE_CHANNEL_ACCESS_TOKEN || "").trim().length >= 100,
+    secretHasSpaces: Boolean(LINE_CHANNEL_SECRET) && LINE_CHANNEL_SECRET !== LINE_CHANNEL_SECRET.trim(),
+    tokenHasSpaces: Boolean(LINE_CHANNEL_ACCESS_TOKEN) && LINE_CHANNEL_ACCESS_TOKEN !== LINE_CHANNEL_ACCESS_TOKEN.trim(),
     topics: store.get().sections.length,
     startedAt: serverStartedAt,
     stats: lineStats,

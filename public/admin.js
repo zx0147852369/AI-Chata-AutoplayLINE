@@ -636,6 +636,18 @@
     if (!d.secretSet || !d.tokenSet) {
       out.push({ bad: true, text: `ยังไม่ได้ตั้ง ${[!d.secretSet && "LINE_CHANNEL_SECRET", !d.tokenSet && "LINE_CHANNEL_ACCESS_TOKEN"].filter(Boolean).join(" และ ")} ใน Railway Variables` });
     }
+    if (d.secretSet && !d.secretFormatOk) {
+      out.push({
+        bad: true,
+        text: "ค่า LINE_CHANNEL_SECRET ที่ตั้งไว้ รูปแบบไม่ใช่ Channel secret (ของจริงเป็นตัวอักษร a-f และตัวเลขรวม 32 ตัว ไม่ใช่สตริงยาว) น่าจะวางผิดช่อง เช่น เอา Channel access token มาใส่ ให้คัดลอก Channel secret จากแท็บ Basic settings ใน LINE Developers",
+      });
+    }
+    if (d.tokenSet && !d.tokenFormatOk) {
+      out.push({ bad: true, text: "ค่า LINE_CHANNEL_ACCESS_TOKEN สั้นผิดปกติ Channel access token (long-lived) เป็นสตริงยาวมาก ตรวจว่าคัดลอกมาครบ" });
+    }
+    if (d.secretHasSpaces || d.tokenHasSpaces) {
+      out.push({ bad: true, text: "ค่า LINE ที่ตั้งไว้มีช่องว่างหรือขึ้นบรรทัดใหม่ติดหัวท้าย ให้ลบแล้ววางใหม่ให้เหลือเฉพาะตัวค่า" });
+    }
     if (s.badSignature > 0) {
       out.push({
         bad: true,
