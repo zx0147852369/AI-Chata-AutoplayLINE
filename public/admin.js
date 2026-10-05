@@ -23,6 +23,7 @@
     close: '<path d="M6 6l12 12M18 6L6 18"/>',
     dashboard: '<rect x="3" y="3" width="7" height="8" rx="1"/><rect x="14" y="3" width="7" height="5" rx="1"/><rect x="14" y="12" width="7" height="9" rx="1"/><rect x="3" y="15" width="7" height="6" rx="1"/>',
     menu: '<path d="M4 7h16M4 12h16M4 17h16"/>',
+    chat: '<path d="M4 5h16v11H10l-5 4v-4H4z"/><path d="M8 9h8M8 12h5"/>',
     sparkle: '<path d="M11 3l1.9 5.1L18 10l-5.1 1.9L11 17l-1.9-5.1L4 10l5.1-1.9z"/><path d="M19 15l.8 2.2L22 18l-2.2.8L19 21l-.8-2.2L16 18l2.2-.8z"/>',
     image: '<rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="9" cy="10" r="1.6"/><path d="M21 16l-5-5-8 9"/>',
     eye: '<path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/>',
@@ -403,6 +404,7 @@
   const NAV = [
     { id: "overview", label: "ภาพรวม", title: "ภาพรวมระบบ", ico: "dashboard" },
     { id: "topics", label: "ข้อมูลเกมและโปรโมชั่น", title: "ข้อมูลเกมและโปรโมชั่น", ico: "book" },
+    { id: "line", label: "สถานะ LINE", title: "สถานะการเชื่อมต่อ LINE", ico: "chat" },
     { id: "ai", label: "ตั้งค่าโหมด AI", title: "ตั้งค่าโหมด AI", ico: "sparkle" },
   ];
 
@@ -623,6 +625,131 @@
     drawTable();
   }
 
+  // ----- Page: LINE connection status -----
+  const fmtTime = (ms) =>
+    ms ? new Date(ms).toLocaleString("th-TH", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit", second: "2-digit" }) : "ยังไม่มี";
+
+  // Turn the raw counters into plain advice
+  function diagnose(d) {
+    const s = d.stats;
+    const out = [];
+    if (!d.secretSet || !d.tokenSet) {
+      out.push({ bad: true, text: `ยังไม่ได้ตั้ง ${[!d.secretSet && "LINE_CHANNEL_SECRET", !d.tokenSet && "LINE_CHANNEL_ACCESS_TOKEN"].filter(Boolean).join(" และ ")} ใน Railway Variables` });
+    }
+    if (s.badSignature > 0) {
+      out.push({
+        bad: true,
+        text: "มีคำขอจาก LINE ที่ลายเซ็นไม่ถูกต้อง แปลว่า LINE_CHANNEL_SECRET ใน Railway ไม่ตรงกับ Channel secret ใน LINE Developers (Basic settings) ถ้าเพิ่งกด Reissue ต้องอัปเดตค่าใน Railway แล้ว deploy ใหม่ และตรวจว่าไม่มีช่องว่างติดมา",
+      });
+    }
+    if (s.received === 0 && s.badSignature === 0) {
+      out.push({
+        bad: true,
+        text: "ยังไม่มีคำขอจาก LINE เข้ามาที่เซิร์ฟเวอร์เลย ให้ตรวจใน LINE Developers > Messaging API ว่า Webhook URL ตรงกับด้านบน กด Verify ให้ผ่าน และเปิด Use webhook (หรือส่งข้อความหาบอทอีกครั้งหลังเปิดหน้านี้แล้วกดรีเฟรช เพราะตัวนับเริ่มใหม่ทุกครั้งที่ระบบ deploy)",
+      });
+    }
+    if (s.lastReply && !s.lastReply.ok) {
+      out.push({
+        bad: true,
+        text: `LINE ปฏิเสธการตอบกลับ (HTTP ${s.lastReply.status || "ต่อไม่ได้"}) ${s.lastReply.status === 401 ? "แปลว่า Channel access token ไม่ถูกต้องหรือถูกยกเลิก ให้ออก token ใหม่แล้วอัปเดตใน Railway" : "ดูรายละเอียดด้านบน"}`,
+      });
+    }
+    if (s.lastAiError) {
+      out.push({ bad: true, text: "AI ตอบไม่ได้ในครั้งล่าสุด ไปที่หน้า 'ตั้งค่าโหมด AI' แล้วกดทดสอบการเชื่อมต่อ" });
+    }
+    if (d.topics === 0) {
+      out.push({ bad: false, text: "ยังไม่มีหัวข้อในระบบ บอทจะตอบ 'ยังไม่มีข้อมูลนี้ค่ะ' ทุกคำถาม ไปเพิ่มข้อมูลที่หน้า 'ข้อมูลเกมและโปรโมชั่น'" });
+    }
+    if (!out.some((x) => x.bad) && s.received > 0 && s.lastReply?.ok) {
+      out.push({ bad: false, ok: true, text: "ระบบรับข้อความจาก LINE และตอบกลับสำเร็จแล้ว ทำงานปกติ" });
+    }
+    return out;
+  }
+
+  async function pageLine() {
+    statEls = null;
+    pageEl.replaceChildren(pageHead("สถานะการเชื่อมต่อ LINE", "ตรวจว่าข้อความจาก LINE เข้ามาถึงระบบและตอบกลับได้หรือไม่"), el("p", { className: "muted", textContent: "กำลังโหลด..." }));
+    let d;
+    try {
+      d = await api("/api/admin/line");
+    } catch (ex) {
+      if (ex.status === 401) return showLogin(true);
+      pageEl.replaceChildren(pageHead("สถานะการเชื่อมต่อ LINE", ""), notice(ex.message));
+      return;
+    }
+    if (route !== "line") return; // user navigated away while loading
+
+    const tokenStatus = el("span", { className: "hint" });
+    const sayToken = (msg, kind = "") => {
+      tokenStatus.textContent = msg;
+      tokenStatus.className = `hint ${kind}`.trim();
+    };
+    const tokenBtn = button("ทดสอบ Channel access token", { ico: "chat" });
+    tokenBtn.disabled = !d.tokenSet;
+    tokenBtn.onclick = async () => {
+      sayToken("กำลังตรวจสอบกับ LINE...");
+      tokenBtn.disabled = true;
+      try {
+        const r = await api("/api/admin/line/test-token", { method: "POST" });
+        sayToken(`token ใช้ได้ บอท: ${r.displayName || "-"}${r.basicId ? ` (${r.basicId})` : ""}`, "ok");
+      } catch (ex) {
+        if (ex.status === 401) return showLogin(true);
+        sayToken(ex.detail ? `${ex.message}: ${ex.detail}` : ex.message, "bad");
+      } finally {
+        tokenBtn.disabled = false;
+      }
+    };
+
+    const copyBtn = button("คัดลอก", { cls: "small" });
+    copyBtn.onclick = async () => {
+      try {
+        await navigator.clipboard.writeText(d.webhookUrl);
+        toast("คัดลอก Webhook URL แล้ว");
+      } catch {
+        toast("คัดลอกไม่ได้ กรุณาเลือกข้อความแล้วคัดลอกเอง");
+      }
+    };
+
+    const yesNo = (ok, yes, no) => el("span", { className: `pill ${ok ? "ok" : "bad"}`, textContent: ok ? yes : no });
+    const s = d.stats;
+    const reply = s.lastReply;
+    const replyView = !reply
+      ? "ยังไม่เคยตอบกลับ"
+      : reply.ok
+        ? `สำเร็จ เมื่อ ${fmtTime(reply.at)}`
+        : `ล้มเหลว เมื่อ ${fmtTime(reply.at)} (HTTP ${reply.status || "ต่อไม่ได้"}) ${reply.detail}`;
+    const findings = diagnose(d);
+    const list = el("ul", { className: "findings" }, ...findings.map((f) => el("li", { className: f.ok ? "ok" : f.bad ? "bad" : "" }, f.text)));
+
+    pageEl.replaceChildren(
+      pageHead("สถานะการเชื่อมต่อ LINE", "ตรวจว่าข้อความจาก LINE เข้ามาถึงระบบและตอบกลับได้หรือไม่", button("รีเฟรช", { onclick: () => render() })),
+      panel("ผลการตรวจสอบ", findings.length ? list : el("p", { className: "para", textContent: "ยังไม่พบปัญหา" })),
+      panel(
+        "การตั้งค่า",
+        el(
+          "dl",
+          { className: "kvs" },
+          kv("Webhook URL", el("span", { className: "inline" }, el("code", { textContent: d.webhookUrl }), copyBtn)),
+          kv("Channel secret", yesNo(d.secretSet, "ตั้งค่าแล้ว", "ยังไม่ได้ตั้งค่า")),
+          kv("Channel access token", yesNo(d.tokenSet, "ตั้งค่าแล้ว", "ยังไม่ได้ตั้งค่า")),
+          kv("หัวข้อในระบบ", `${d.topics} หัวข้อ`)
+        ),
+        el("div", { className: "test-row" }, tokenBtn, tokenStatus)
+      ),
+      panel(
+        `กิจกรรมล่าสุด (นับตั้งแต่ระบบเริ่มทำงาน ${fmtTime(d.startedAt)})`,
+        el(
+          "dl",
+          { className: "kvs" },
+          kv("คำขอจาก LINE ที่ผ่านการตรวจ", `${s.received} ครั้ง (ล่าสุด ${fmtTime(s.lastReceivedAt)})`),
+          kv("ลายเซ็นไม่ถูกต้อง", `${s.badSignature} ครั้ง (ล่าสุด ${fmtTime(s.lastBadSignatureAt)})`),
+          kv("การตอบกลับ LINE ล่าสุด", replyView),
+          kv("ข้อผิดพลาดของ AI ล่าสุด", s.lastAiError ? `${fmtTime(s.lastAiError.at)}: ${s.lastAiError.message}` : "ไม่มี")
+        )
+      )
+    );
+  }
+
   // ----- Page: AI mode -----
   function pageAi() {
     statEls = null;
@@ -696,7 +823,7 @@
     );
   }
 
-  const PAGES = { overview: pageOverview, topics: pageTopics, ai: pageAi };
+  const PAGES = { overview: pageOverview, topics: pageTopics, line: pageLine, ai: pageAi };
 
   function render() {
     route = routeFromHash();

@@ -178,20 +178,39 @@ function verifySignature(rawBody, signature) {
 const LINE_API = process.env.LINE_API_BASE || "https://api.line.me";
 const MAX_REPLY_IMAGES = 4; // LINE allows 5 messages per reply: 1 text + 4 images
 
+// What happened since the server started, shown on the admin "LINE status" page
+// so a silent bot can be diagnosed without reading Railway logs (kept in memory)
+const serverStartedAt = Date.now();
+const lineStats = { received: 0, lastReceivedAt: null, badSignature: 0, lastBadSignatureAt: null, lastReply: null, lastAiError: null };
+const scrubSecrets = (s) =>
+  [LINE_CHANNEL_ACCESS_TOKEN, LINE_CHANNEL_SECRET, LLM_API_KEY, GEMINI_API_KEY, ADMIN_PASSWORD]
+    .filter((k) => k && k.length >= 8) // real secrets are long; skip short values that would mangle ordinary words
+    .reduce((t, k) => t.split(k).join("***"), String(s).replace(/\s+/g, " "))
+    .slice(0, 300);
+
 async function reply(replyToken, text, imageUrls = []) {
   const messages = [{ type: "text", text: text.slice(0, 5000) }];
   for (const url of imageUrls.slice(0, MAX_REPLY_IMAGES)) {
     messages.push({ type: "image", originalContentUrl: url, previewImageUrl: url });
   }
-  const res = await fetch(`${LINE_API}/v2/bot/message/reply`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${LINE_CHANNEL_ACCESS_TOKEN}`,
-    },
-    body: JSON.stringify({ replyToken, messages }),
-  });
-  if (!res.ok) console.error("LINE reply failed:", res.status, await res.text());
+  let res;
+  try {
+    res = await fetch(`${LINE_API}/v2/bot/message/reply`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${LINE_CHANNEL_ACCESS_TOKEN}`,
+      },
+      body: JSON.stringify({ replyToken, messages }),
+      signal: AbortSignal.timeout(15000),
+    });
+  } catch (err) {
+    lineStats.lastReply = { at: Date.now(), ok: false, status: 0, detail: scrubSecrets(err.message) };
+    throw err;
+  }
+  const body = res.ok ? "" : await res.text();
+  lineStats.lastReply = { at: Date.now(), ok: res.ok, status: res.status, detail: scrubSecrets(body) };
+  if (!res.ok) console.error("LINE reply failed:", res.status, body);
 }
 
 async function handleEvent(event, baseUrl) {
@@ -205,6 +224,7 @@ async function handleEvent(event, baseUrl) {
     await reply(event.replyToken, text || NOT_FOUND_REPLY, images);
   } catch (err) {
     console.error("handleEvent error:", err);
+    lineStats.lastAiError = { at: Date.now(), message: scrubSecrets(err.message) };
     await reply(event.replyToken, "ขออภัยค่ะ ระบบขัดข้องชั่วคราว กรุณาลองใหม่อีกครั้งนะคะ");
   }
 }
@@ -268,8 +288,12 @@ app.post("/webhook", express.raw({ type: "*/*" }), (req, res) => {
     return res.status(503).send("Server not configured");
   }
   if (!verifySignature(req.body, req.get("x-line-signature"))) {
+    lineStats.badSignature += 1;
+    lineStats.lastBadSignatureAt = Date.now();
     return res.status(401).send("Invalid signature");
   }
+  lineStats.received += 1;
+  lineStats.lastReceivedAt = Date.now();
   res.sendStatus(200); // ack fast; process asynchronously
   let events = [];
   try {
@@ -278,7 +302,8 @@ app.post("/webhook", express.raw({ type: "*/*" }), (req, res) => {
     return;
   }
   const baseUrl = (PUBLIC_BASE_URL || `${req.protocol}://${req.get("host")}`).replace(/\/+$/, "");
-  events.forEach((e) => handleEvent(e, baseUrl));
+  // A failed reply must never become an unhandled rejection (that would crash the process)
+  events.forEach((e) => handleEvent(e, baseUrl).catch((err) => console.error("reply failed after error:", err.message)));
 });
 
 const json = express.json({ limit: "2mb" });
@@ -346,6 +371,38 @@ app.delete("/api/admin/image/:file", requireAdmin, (req, res) => {
   res.json({ ok: true });
 });
 
+// LINE connection status: lets the admin see why the bot is silent
+app.get("/api/admin/line", requireAdmin, (req, res) => {
+  const base = (PUBLIC_BASE_URL || `${req.protocol}://${req.get("host")}`).replace(/\/+$/, "");
+  res.json({
+    webhookUrl: `${base}/webhook`,
+    secretSet: Boolean(LINE_CHANNEL_SECRET),
+    tokenSet: Boolean(LINE_CHANNEL_ACCESS_TOKEN),
+    topics: store.get().sections.length,
+    startedAt: serverStartedAt,
+    stats: lineStats,
+  });
+});
+
+// Asks LINE who this token belongs to: proves the Channel access token is valid
+app.post("/api/admin/line/test-token", requireAdmin, async (_req, res) => {
+  if (!LINE_CHANNEL_ACCESS_TOKEN) return res.status(503).json({ error: "ยังไม่ได้ตั้ง LINE_CHANNEL_ACCESS_TOKEN" });
+  try {
+    const r = await fetch(`${LINE_API}/v2/bot/info`, {
+      headers: { Authorization: `Bearer ${LINE_CHANNEL_ACCESS_TOKEN}` },
+      signal: AbortSignal.timeout(15000),
+    });
+    const text = await r.text();
+    if (!r.ok) {
+      return res.status(502).json({ error: "LINE ปฏิเสธ Channel access token", detail: scrubSecrets(`HTTP ${r.status}: ${text}`) });
+    }
+    const info = JSON.parse(text);
+    res.json({ ok: true, displayName: info.displayName || "", basicId: info.basicId || "" });
+  } catch (err) {
+    res.status(502).json({ error: "ติดต่อ LINE ไม่ได้", detail: scrubSecrets(err.message) });
+  }
+});
+
 // AI mode (Gemini or LLM): which provider the bot and the AI writer use. Admin only.
 const aiInfo = () => ({
   active: activeProvider(),
@@ -398,10 +455,7 @@ app.post("/api/admin/ai/test", requireAdmin, async (req, res) => {
     // The admin sees the real reason (HTTP status / provider message / timeout), with keys removed
     const reason =
       err.name === "TimeoutError" ? "ไม่ตอบกลับภายใน 40 วินาที (timeout)" : `${err.message}${err.cause?.code ? ` [${err.cause.code}]` : ""}`;
-    const detail = [LLM_API_KEY, GEMINI_API_KEY]
-      .filter(Boolean)
-      .reduce((s, k) => s.split(k).join("***"), reason.replace(/\s+/g, " "))
-      .slice(0, 300);
+    const detail = scrubSecrets(reason);
     res.status(502).json({ error: "เชื่อมต่อ AI ไม่สำเร็จ", detail });
   }
 });

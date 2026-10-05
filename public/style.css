@@ -454,3 +454,11 @@ label.field { display: block; font-size: 13.5px; font-weight: 600; color: var(--
 @media (prefers-reduced-motion: reduce) {
   * { transition: none !important; }
 }
+
+/* ---------- LINE status ---------- */
+.findings { margin: 0; padding: 0; list-style: none; display: grid; gap: 10px; }
+.findings li { padding: 11px 14px 11px 16px; font-size: 14.5px; line-height: 1.6; color: var(--warn-ink); background: #fff7e8; border: 1px solid #f0dcae; border-left: 4px solid #d99a1d; border-radius: var(--radius-sm); }
+.findings li.bad { color: #7f1d14; background: var(--danger-soft); border-color: #f2c4bf; border-left-color: var(--danger); }
+.findings li.ok { color: #0f5a3a; background: var(--ok-soft); border-color: #bfe3d0; border-left-color: var(--ok); }
+.inline { display: inline-flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.kv code { padding: 2px 8px; font-size: 13.5px; background: var(--bg); border: 1px solid var(--line); border-radius: 6px; overflow-wrap: anywhere; }
