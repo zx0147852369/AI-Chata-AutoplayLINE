@@ -123,11 +123,11 @@
       { className: "login" },
       lock,
       el("h1", { textContent: "เข้าสู่ระบบผู้ดูแล" }),
-      el("p", { textContent: "สำหรับฝ่าย HR เพื่อแก้ไขกฎเกณฑ์ที่บอท LINE ใช้ตอบพนักงาน" }),
+      el("p", { textContent: "สำหรับผู้ดูแล เพื่อแก้ไขข้อมูลเกมและโปรโมชั่นที่บอท LINE ใช้ตอบลูกค้า" }),
       el("label", { className: "field" }, "รหัสผ่าน", el("div", { className: "pw" }, pw, toggle)),
       err,
       submit,
-      el("p", { className: "foot", textContent: "พนักงานสอบถามผ่าน LINE เท่านั้น หน้านี้สำหรับผู้ดูแล" })
+      el("p", { className: "foot", textContent: "ลูกค้าสอบถามผ่าน LINE เท่านั้น หน้านี้สำหรับผู้ดูแล" })
     );
 
     form.onsubmit = async (e) => {
@@ -197,10 +197,10 @@
     let saved = false;
     let uploading = 0;
 
-    const category = el("input", { className: "input", value: topic?.category ?? "", placeholder: "เช่น การลา, เวลาทำงาน, สวัสดิการ", maxLength: 80 });
+    const category = el("input", { className: "input", value: topic?.category ?? "", placeholder: "เช่น โปรโมชั่น, เกมสล็อต, ฝาก-ถอน", maxLength: 80 });
     category.setAttribute("list", "cats");
-    const title = el("input", { className: "input", value: topic?.title ?? "", placeholder: "เช่น สิทธิ์การลาพักร้อน", maxLength: 200 });
-    const body = el("textarea", { className: "textarea", value: topic?.body ?? "", placeholder: "รายละเอียดของกฎเกณฑ์", maxLength: MAX_BODY });
+    const title = el("input", { className: "input", value: topic?.title ?? "", placeholder: "เช่น เครดิตฟรีสำหรับสมาชิกใหม่", maxLength: 200 });
+    const body = el("textarea", { className: "textarea", value: topic?.body ?? "", placeholder: "รายละเอียด เช่น\n- ยอดเครดิตที่ได้รับ:\n- ยอดเทิร์นที่ต้องทำ:\n- ยอดถอนสูงสุด:\n- ระยะเวลาโปรโมชั่น:\n- เกมที่ร่วมรายการ:\n- ข้อจำกัด:", maxLength: MAX_BODY });
     const counter = el("span", { className: "hint" });
     const showCount = () => (counter.textContent = `${body.value.length.toLocaleString()} / ${MAX_BODY.toLocaleString()} ตัวอักษร`);
     showCount();
@@ -215,7 +215,7 @@
     const aiToggle = button("ให้ AI ช่วยเขียน", { ico: "sparkle", cls: "small" });
     const aiPrompt = el("textarea", {
       className: "textarea",
-      placeholder: "บอก AI เป็นข้อมูลดิบสั้นๆ เช่น ลาพักร้อน 10 วันต่อปี แจ้งล่วงหน้าอย่างน้อย 3 วัน ลาติดกันไม่เกิน 5 วัน",
+      placeholder: "บอก AI เป็นข้อมูลดิบสั้นๆ เช่น เครดิตฟรีสมาชิกใหม่ [ยอด] บาท ทำเทิร์น [กี่เท่า] ถอนได้สูงสุด [ยอด] บาท ใช้ได้ [กี่วัน]",
       maxLength: 4000,
     });
     aiPrompt.style.minHeight = "84px";
@@ -350,7 +350,7 @@
         "div",
         { className: "field images-field" },
         el("div", { className: "images-head" }, el("span", { textContent: "รูปภาพประกอบ" }), pick, fileInput),
-        el("p", { className: "hint", textContent: "บอทจะส่งรูปเหล่านี้ให้พนักงานใน LINE เมื่อตอบเรื่องนี้ (ลิงก์รูปเปิดดูได้โดยผู้ที่มีลิงก์ อย่าใช้รูปที่เป็นความลับ)" }),
+        el("p", { className: "hint", textContent: "บอทจะส่งรูปเหล่านี้ให้ลูกค้าใน LINE เมื่อตอบเรื่องนี้ (ลิงก์รูปเปิดดูได้โดยผู้ที่มีลิงก์ อย่าใช้รูปที่เป็นความลับ)" }),
         thumbs,
         imgHint
       ),
@@ -464,7 +464,7 @@
       e.append(
         ic,
         el("strong", { textContent: "ยังไม่มีหัวข้อ" }),
-        "เริ่มใส่กฎเกณฑ์ของบริษัท เพื่อให้บอท LINE ตอบพนักงานได้",
+        "เริ่มใส่ข้อมูลเกมและโปรโมชั่น เพื่อให้บอท LINE ตอบลูกค้าได้",
         el("div", {}, button("เพิ่มหัวข้อแรก", { cls: "primary", ico: "plus", onclick: () => openTopicDialog() }))
       );
       listEl.replaceChildren(e);
@@ -579,7 +579,7 @@
         "section",
         { className: "page-head" },
         el("span", { className: "eyebrow", textContent: "Knowledge Base" }),
-        el("h1", { textContent: "จัดการกฎเกณฑ์บริษัท" }),
+        el("h1", { textContent: "จัดการข้อมูลเกมและโปรโมชั่น" }),
         el("p", { textContent: "แต่ละหัวข้อแยกเป็นรายการของตัวเอง เพิ่ม แก้ไข หรือลบได้ทีละหัวข้อ และบันทึกทันที บอท LINE ใช้ข้อมูลใหม่ได้เลย" }),
         el("div", { className: "stats" }, sCount.node, sCats.node, sUpd.node)
       ),
