@@ -211,7 +211,7 @@ const app = express();
 app.set("trust proxy", 1);
 app.disable("x-powered-by");
 
-app.get("/health", (_req, res) => res.json({ ok: true, provider, missingEnv }));
+app.get("/health", (_req, res) => res.json({ ok: true, provider, missingEnv, storage: store.info() }));
 
 // LINE webhook (needs the raw body for signature verification)
 app.post("/webhook", express.raw({ type: "*/*" }), (req, res) => {
@@ -244,7 +244,7 @@ app.get("/api/admin/status", (req, res) =>
     enabled: adminEnabled,
     reason: adminReason,
     loggedIn: isAdmin(req),
-    persistent: store.persistent,
+    persistent: store.info().persistent,
   })
 );
 

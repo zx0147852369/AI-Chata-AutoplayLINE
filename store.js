@@ -9,12 +9,37 @@ const FILE = path.join(DATA_DIR, "rules.json");
 const LIMITS = { sections: 200, title: 200, category: 80, body: 20000 };
 
 let state = { updatedAt: null, sections: [] };
+let loadedFromDisk = false;
+let writable = false;
+
+// Can we actually write into the data dir? (catches volume permission problems at boot)
+try {
+  fs.mkdirSync(DATA_DIR, { recursive: true });
+  const probe = path.join(DATA_DIR, ".write-test");
+  fs.writeFileSync(probe, "ok");
+  fs.unlinkSync(probe);
+  writable = true;
+} catch (err) {
+  console.error(`Data dir ${DATA_DIR} is NOT writable:`, err.message);
+}
 
 try {
-  state = JSON.parse(fs.readFileSync(FILE, "utf8"));
-} catch {
-  // first run: start empty
+  const parsed = JSON.parse(fs.readFileSync(FILE, "utf8"));
+  if (Array.isArray(parsed.sections)) {
+    state = parsed;
+    loadedFromDisk = true;
+  }
+} catch (err) {
+  if (err.code !== "ENOENT") {
+    // Never silently discard a file we could not read: keep a copy for recovery
+    console.error(`Could not read ${FILE}:`, err.message);
+    try { fs.copyFileSync(FILE, `${FILE}.unreadable-${Date.now()}`); } catch {}
+  }
 }
+
+console.log(
+  `Data file: ${FILE} | volume=${Boolean(VOLUME_DIR)} writable=${writable} loadedFromDisk=${loadedFromDisk} sections=${state.sections.length}`
+);
 
 function get() {
   return state;
@@ -50,4 +75,9 @@ function toKnowledge(maxChars) {
     .slice(0, maxChars);
 }
 
-module.exports = { get, save, toKnowledge, persistent: Boolean(VOLUME_DIR) };
+// Non-sensitive storage status for /health and the admin notice
+function info() {
+  return { persistent: Boolean(VOLUME_DIR) && writable, writable, loadedFromDisk, sections: state.sections.length };
+}
+
+module.exports = { get, save, toKnowledge, info };
