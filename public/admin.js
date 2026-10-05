@@ -22,6 +22,7 @@
     trash: '<path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/>',
     edit: '<path d="M4 20h4L19 9l-4-4L4 16z"/><path d="M13.5 6.5l4 4"/>',
     close: '<path d="M6 6l12 12M18 6L6 18"/>',
+    image: '<rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="9" cy="10" r="1.6"/><path d="M21 16l-5-5-8 9"/>',
     eye: '<path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/>',
     eyeOff: '<path d="M3 3l18 18M10.6 5.1A10 10 0 0 1 12 5c6.5 0 10 7 10 7a17 17 0 0 1-3.2 4M6.5 6.6C3.8 8.4 2 12 2 12s3.5 7 10 7c1.7 0 3.2-.4 4.5-1"/>',
     lock: '<rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/>',
@@ -146,10 +147,54 @@
     if (enabled) pw.focus();
   }
 
+  // ---------- Images ----------
+  const MAX_IMAGES = 4;
+  const MAX_UPLOAD_BYTES = 900 * 1024; // LINE preview images must stay under 1 MB
+
+  // Shrink any browser-readable image to a JPEG that LINE accepts
+  async function shrinkToJpeg(file) {
+    let bmp;
+    try {
+      bmp = await createImageBitmap(file);
+    } catch {
+      throw new Error("เปิดไฟล์นี้ไม่ได้ กรุณาใช้รูป JPEG, PNG หรือ WebP");
+    }
+    let scale = Math.min(1, 1600 / Math.max(bmp.width, bmp.height));
+    for (let attempt = 0; attempt < 6; attempt++) {
+      const w = Math.max(1, Math.round(bmp.width * scale));
+      const h = Math.max(1, Math.round(bmp.height * scale));
+      const canvas = document.createElement("canvas");
+      canvas.width = w;
+      canvas.height = h;
+      const ctx = canvas.getContext("2d");
+      ctx.fillStyle = "#fff"; // JPEG has no transparency
+      ctx.fillRect(0, 0, w, h);
+      ctx.drawImage(bmp, 0, 0, w, h);
+      for (const q of [0.88, 0.78, 0.68, 0.55]) {
+        const blob = await new Promise((r) => canvas.toBlob(r, "image/jpeg", q));
+        if (blob && blob.size <= MAX_UPLOAD_BYTES) return blob;
+      }
+      scale *= 0.75;
+    }
+    throw new Error("ย่อรูปให้เล็กพอไม่ได้ ลองใช้รูปอื่น");
+  }
+
+  async function uploadImage(blob) {
+    const res = await fetch("/api/admin/image", { method: "POST", headers: { "Content-Type": "image/jpeg" }, body: blob });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw Object.assign(new Error(data.error || "อัปโหลดไม่สำเร็จ"), { status: res.status });
+    return data.file;
+  }
+
   // ---------- Topic dialog (add / edit one topic) ----------
   function openTopicDialog(topic) {
     const editing = Boolean(topic);
     const dlg = el("dialog", { className: "modal" });
+
+    let images = [...(topic?.images || [])];
+    const fresh = new Set(); // uploaded in this dialog and not saved yet
+    let saved = false;
+    let uploading = 0;
 
     const category = el("input", { className: "input", value: topic?.category ?? "", placeholder: "เช่น การลา, เวลาทำงาน, สวัสดิการ", maxLength: 80 });
     category.setAttribute("list", "cats");
@@ -165,6 +210,53 @@
     const cancel = button("ยกเลิก", { onclick: close });
     const saveBtn = button(editing ? "บันทึกการแก้ไข" : "บันทึกหัวข้อ", { cls: "primary", type: "submit" });
 
+    // Image picker
+    const thumbs = el("div", { className: "thumbs" });
+    const fileInput = el("input", { type: "file", accept: "image/*", multiple: true, hidden: true });
+    const pick = button("เลือกรูป", { ico: "image", cls: "small", onclick: () => fileInput.click() });
+    const imgHint = el("span", { className: "hint" });
+
+    function renderThumbs() {
+      thumbs.replaceChildren(
+        ...images.map((f) => {
+          const rm = el("button", { type: "button", className: "thumb-x", title: "เอารูปนี้ออก" });
+          rm.setAttribute("aria-label", "เอารูปนี้ออก");
+          rm.append(icon("close", 14));
+          rm.onclick = () => {
+            images = images.filter((x) => x !== f);
+            if (fresh.delete(f)) fetch(`/api/admin/image/${f}`, { method: "DELETE" }).catch(() => {});
+            renderThumbs();
+          };
+          return el("figure", { className: "thumb" }, el("img", { src: `/uploads/${f}`, alt: "รูปประกอบ", loading: "lazy" }), rm);
+        }),
+        ...Array.from({ length: uploading }, () => el("figure", { className: "thumb loading", textContent: "กำลังอัปโหลด" }))
+      );
+      pick.disabled = images.length + uploading >= MAX_IMAGES;
+      saveBtn.disabled = uploading > 0;
+      imgHint.textContent = `${images.length}/${MAX_IMAGES} รูป รองรับ JPEG, PNG, WebP`;
+    }
+
+    fileInput.onchange = async () => {
+      err.textContent = "";
+      const files = [...fileInput.files].slice(0, MAX_IMAGES - images.length - uploading);
+      fileInput.value = "";
+      for (const file of files) {
+        uploading++;
+        renderThumbs();
+        try {
+          const f = await uploadImage(await shrinkToJpeg(file));
+          images.push(f);
+          fresh.add(f);
+        } catch (ex) {
+          if (ex.status === 401) { dlg.close(); return showLogin(true); }
+          err.textContent = ex.message;
+        } finally {
+          uploading--;
+          renderThumbs();
+        }
+      }
+    };
+
     const head = el(
       "div",
       { className: "modal-head" },
@@ -179,6 +271,14 @@
       el("label", { className: "field" }, "หัวข้อ", title),
       el("label", { className: "field" }, "รายละเอียด", body),
       el("div", { className: "modal-meta" }, el("span", { className: "hint", textContent: "ขึ้นบรรทัดใหม่เพื่อแยกย่อหน้า" }), counter),
+      el(
+        "div",
+        { className: "field images-field" },
+        el("div", { className: "images-head" }, el("span", { textContent: "รูปภาพประกอบ" }), pick, fileInput),
+        el("p", { className: "hint", textContent: "บอทจะส่งรูปเหล่านี้ให้พนักงานใน LINE เมื่อตอบเรื่องนี้ (ลิงก์รูปเปิดดูได้โดยผู้ที่มีลิงก์ อย่าใช้รูปที่เป็นความลับ)" }),
+        thumbs,
+        imgHint
+      ),
       err,
       el("div", { className: "modal-actions" }, cancel, saveBtn)
     );
@@ -195,8 +295,9 @@
       try {
         const data = await api("/api/admin/section", {
           method: "POST",
-          body: { id: topic?.id, category: category.value, title: title.value, body: body.value },
+          body: { id: topic?.id, category: category.value, title: title.value, body: body.value, images },
         });
+        saved = true;
         dlg.close();
         applyState(data);
         toast(editing ? "บันทึกการแก้ไขแล้ว บอท LINE ใช้ข้อมูลใหม่ทันที" : "เพิ่มหัวข้อแล้ว บอท LINE ใช้ข้อมูลใหม่ทันที");
@@ -208,9 +309,14 @@
     };
 
     dlg.append(head, form);
-    dlg.addEventListener("close", () => dlg.remove());
+    dlg.addEventListener("close", () => {
+      // Cancelled: throw away pictures uploaded in this dialog that were never saved
+      if (!saved) fresh.forEach((f) => fetch(`/api/admin/image/${f}`, { method: "DELETE" }).catch(() => {}));
+      dlg.remove();
+    });
     dlg.addEventListener("click", (e) => { if (e.target === dlg) dlg.close(); }); // click on backdrop
     document.body.append(dlg);
+    renderThumbs();
     dlg.showModal();
     (editing ? body : title).focus();
   }
@@ -261,7 +367,10 @@
       { className: "item-main" },
       el("span", { className: "tag", textContent: s.category }),
       el("h3", { textContent: s.title || "(ไม่มีหัวข้อ)" }),
-      el("p", { className: "preview", textContent: preview(s.body) })
+      el("p", { className: "preview", textContent: preview(s.body) }),
+      ...(s.images?.length
+        ? [el("div", { className: "thumbs-row" }, ...s.images.map((f) => el("img", { src: `/uploads/${f}`, alt: "", loading: "lazy" })))]
+        : [])
     );
 
     const c = el("article", { className: "item" }, el("span", { className: "badge", textContent: String(i + 1).padStart(2, "0") }), main, actions);

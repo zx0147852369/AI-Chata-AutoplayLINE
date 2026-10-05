@@ -13,6 +13,7 @@ const {
   LLM_BASE_URL, // e.g. https://ai.thirx.com/v1
   LLM_API_KEY,
   LLM_MODEL = "qwen3.8-27b",
+  PUBLIC_BASE_URL, // optional: override the https origin used for image links sent to LINE
   PORT = 3000,
 } = process.env;
 
@@ -50,9 +51,14 @@ const SYSTEM_PROMPT = `คุณคือพนักงานตำแหน่
 - หากข้อมูลที่ให้มาไม่เกี่ยวข้องกับคำถาม ให้ตอบว่า "${NOT_FOUND_REPLY}"
 - ห้ามคิดคำตอบขึ้นมาเองหรือใช้ความรู้ภายนอกที่ไม่อยู่ในข้อมูลที่ให้มา`;
 
+// Extra rule appended only when at least one topic has images, so replies stay identical otherwise
+const IMAGE_RULE = `
+- แต่ละหัวข้อมีเลขกำกับ เช่น #3 ท้ายคำตอบให้ขึ้นบรรทัดใหม่แล้วใส่ [[ใช้หัวข้อ: เลขหัวข้อที่ใช้ตอบ คั่นด้วยจุลภาค]] เช่น [[ใช้หัวข้อ: 1,3]] ถ้าไม่ได้ใช้หัวข้อใดเลยให้ใส่ [[ใช้หัวข้อ: -]]`;
+const systemPrompt = (hasImages) => SYSTEM_PROMPT + (hasImages ? IMAGE_RULE : "");
+
 // ---------- Gemini ----------
 
-async function askGemini(question, knowledge) {
+async function askGemini(question, knowledge, system) {
   const res = await fetch(
     `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`,
     {
@@ -62,7 +68,7 @@ async function askGemini(question, knowledge) {
         "x-goog-api-key": GEMINI_API_KEY,
       },
       body: JSON.stringify({
-        systemInstruction: { parts: [{ text: SYSTEM_PROMPT }] },
+        systemInstruction: { parts: [{ text: system }] },
         contents: [
           {
             role: "user",
@@ -88,7 +94,7 @@ async function askGemini(question, knowledge) {
 }
 
 // OpenAI-compatible /chat/completions (works with most LLM gateways)
-async function askOpenAI(question, knowledge) {
+async function askOpenAI(question, knowledge, system) {
   const res = await fetch(`${LLM_BASE_URL.replace(/\/+$/, "")}/chat/completions`, {
     method: "POST",
     headers: {
@@ -99,7 +105,7 @@ async function askOpenAI(question, knowledge) {
       model: LLM_MODEL,
       temperature: 0.2,
       messages: [
-        { role: "system", content: SYSTEM_PROMPT },
+        { role: "system", content: system },
         {
           role: "user",
           content: `ข้อมูลของบริษัท:\n"""\n${knowledge}\n"""\n\nคำถามจากพนักงาน: ${question}`,
@@ -116,8 +122,18 @@ async function askOpenAI(question, knowledge) {
   return answer || NOT_FOUND_REPLY;
 }
 
-const askLLM = (question, knowledge) =>
-  useOpenAI ? askOpenAI(question, knowledge) : askGemini(question, knowledge);
+const askLLM = (question, knowledge, system) =>
+  useOpenAI ? askOpenAI(question, knowledge, system) : askGemini(question, knowledge, system);
+
+// Split "[[ใช้หัวข้อ: 1,3]]" off the answer and collect those topics' images
+const USED_TAG = /\[\[\s*ใช้หัวข้อ\s*:([^\]]*)\]\]/g;
+function splitAnswer(raw, topics) {
+  const used = new Set();
+  for (const m of raw.matchAll(USED_TAG)) (m[1].match(/\d+/g) || []).forEach((n) => used.add(Number(n)));
+  const text = raw.replace(USED_TAG, "").trim();
+  const files = [...used].sort((a, b) => a - b).flatMap((n) => topics[n - 1]?.images || []);
+  return { text, files: [...new Set(files)] };
+}
 
 // ---------- LINE ----------
 
@@ -132,28 +148,34 @@ function verifySignature(rawBody, signature) {
   return a.length === b.length && crypto.timingSafeEqual(a, b);
 }
 
-async function reply(replyToken, text) {
-  const res = await fetch("https://api.line.me/v2/bot/message/reply", {
+const LINE_API = process.env.LINE_API_BASE || "https://api.line.me";
+const MAX_REPLY_IMAGES = 4; // LINE allows 5 messages per reply: 1 text + 4 images
+
+async function reply(replyToken, text, imageUrls = []) {
+  const messages = [{ type: "text", text: text.slice(0, 5000) }];
+  for (const url of imageUrls.slice(0, MAX_REPLY_IMAGES)) {
+    messages.push({ type: "image", originalContentUrl: url, previewImageUrl: url });
+  }
+  const res = await fetch(`${LINE_API}/v2/bot/message/reply`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
       Authorization: `Bearer ${LINE_CHANNEL_ACCESS_TOKEN}`,
     },
-    body: JSON.stringify({
-      replyToken,
-      messages: [{ type: "text", text: text.slice(0, 5000) }],
-    }),
+    body: JSON.stringify({ replyToken, messages }),
   });
   if (!res.ok) console.error("LINE reply failed:", res.status, await res.text());
 }
 
-async function handleEvent(event) {
+async function handleEvent(event, baseUrl) {
   if (event.type !== "message" || event.message.type !== "text") return;
   try {
-    const knowledge = store.toKnowledge(MAX_CONTEXT_CHARS);
-    if (!knowledge) return reply(event.replyToken, NOT_FOUND_REPLY);
-    const answer = await askLLM(event.message.text, knowledge);
-    await reply(event.replyToken, answer);
+    const k = store.toKnowledge(MAX_CONTEXT_CHARS);
+    if (!k.text) return reply(event.replyToken, NOT_FOUND_REPLY);
+    const raw = await askLLM(event.message.text, k.text, systemPrompt(k.hasImages));
+    const { text, files } = splitAnswer(raw, k.topics);
+    const images = text.includes(NOT_FOUND_REPLY) ? [] : files.map((f) => `${baseUrl}/uploads/${f}`);
+    await reply(event.replyToken, text || NOT_FOUND_REPLY, images);
   } catch (err) {
     console.error("handleEvent error:", err);
     await reply(event.replyToken, "ขออภัยค่ะ ระบบขัดข้องชั่วคราว กรุณาลองใหม่อีกครั้งนะคะ");
@@ -228,7 +250,8 @@ app.post("/webhook", express.raw({ type: "*/*" }), (req, res) => {
   } catch {
     return;
   }
-  events.forEach((e) => handleEvent(e));
+  const baseUrl = (PUBLIC_BASE_URL || `${req.protocol}://${req.get("host")}`).replace(/\/+$/, "");
+  events.forEach((e) => handleEvent(e, baseUrl));
 });
 
 const json = express.json({ limit: "2mb" });
@@ -281,14 +304,46 @@ const respond = (res, fn) => {
   }
 };
 
+// Images: the browser shrinks them to JPEG first; the server checks the real file type
+app.post("/api/admin/image", requireAdmin, express.raw({ type: ["image/jpeg", "image/png"], limit: "3mb" }), (req, res) => {
+  try {
+    if (!Buffer.isBuffer(req.body) || !req.body.length) throw new Error("ไม่พบไฟล์รูป");
+    const file = store.saveImage(req.body);
+    res.json({ file });
+  } catch (err) {
+    res.status(400).json({ error: err.message || "อัปโหลดไม่สำเร็จ" });
+  }
+});
+app.delete("/api/admin/image/:file", requireAdmin, (req, res) => {
+  store.discardUploaded(req.params.file);
+  res.json({ ok: true });
+});
+
 app.post("/api/admin/section", requireAdmin, json, (req, res) => respond(res, () => store.upsert(req.body)));
 app.delete("/api/admin/section/:id", requireAdmin, (req, res) => respond(res, () => store.remove(req.params.id)));
 app.post("/api/admin/section/:id/move", requireAdmin, json, (req, res) =>
   respond(res, () => store.move(req.params.id, Number(req.body?.delta) || 0))
 );
 
+// Unguessable file names; LINE fetches these when the bot replies with a picture
+app.use(
+  "/uploads",
+  express.static(store.UPLOAD_DIR, {
+    index: false,
+    maxAge: "30d",
+    immutable: true,
+    setHeaders: (res) => res.set("X-Content-Type-Options", "nosniff"),
+  })
+);
+
 app.get("/", (_req, res) => res.redirect("/admin"));
 app.get("/admin", (_req, res) => res.sendFile(path.join(__dirname, "public", "admin.html")));
 app.use(express.static(path.join(__dirname, "public"), { index: false }));
+
+// eslint-disable-next-line no-unused-vars
+app.use((err, _req, res, _next) => {
+  const tooBig = err.type === "entity.too.large";
+  res.status(tooBig ? 413 : err.status || 500).json({ error: tooBig ? "ไฟล์ใหญ่เกินไป" : "เกิดข้อผิดพลาด" });
+});
 
 app.listen(PORT, "0.0.0.0", () => console.log(`Listening on ${PORT}`));
