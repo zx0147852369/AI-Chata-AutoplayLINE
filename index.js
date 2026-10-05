@@ -387,11 +387,18 @@ app.post("/api/admin/ai/test", requireAdmin, async (req, res) => {
   aiSpend(req.ip);
   const started = Date.now();
   try {
-    const reply = await complete("ตอบสั้นๆ เป็นภาษาไทย", "ตอบว่า พร้อมใช้งาน", { timeoutMs: 20000 });
+    const reply = await complete("ตอบสั้นๆ เป็นภาษาไทย", "ตอบว่า พร้อมใช้งาน", { timeoutMs: 40000 });
     res.json({ ok: true, ms: Date.now() - started, reply: reply.slice(0, 80) });
   } catch (err) {
     console.error("ai test failed:", err.message);
-    res.status(502).json({ error: "เชื่อมต่อ AI ไม่สำเร็จ ตรวจสอบ key, URL และชื่อโมเดลใน Railway Variables" });
+    // The admin sees the real reason (HTTP status / provider message / timeout), with keys removed
+    const reason =
+      err.name === "TimeoutError" ? "ไม่ตอบกลับภายใน 40 วินาที (timeout)" : `${err.message}${err.cause?.code ? ` [${err.cause.code}]` : ""}`;
+    const detail = [LLM_API_KEY, GEMINI_API_KEY]
+      .filter(Boolean)
+      .reduce((s, k) => s.split(k).join("***"), reason.replace(/\s+/g, " "))
+      .slice(0, 300);
+    res.status(502).json({ error: "เชื่อมต่อ AI ไม่สำเร็จ", detail });
   }
 });
 

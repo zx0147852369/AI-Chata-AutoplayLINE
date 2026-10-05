@@ -75,7 +75,7 @@
       body: opts.body ? JSON.stringify(opts.body) : undefined,
     });
     const data = await res.json().catch(() => ({}));
-    if (!res.ok) throw Object.assign(new Error(data.error || "เกิดข้อผิดพลาด"), { status: res.status });
+    if (!res.ok) throw Object.assign(new Error(data.error || "เกิดข้อผิดพลาด"), { status: res.status, detail: data.detail });
     return data;
   }
 
@@ -529,7 +529,7 @@
         say(`เชื่อมต่อได้ ตอบกลับใน ${(r.ms / 1000).toFixed(1)} วินาที`, "ok");
       } catch (ex) {
         if (ex.status === 401) return showLogin(true);
-        say(ex.message, "bad");
+        say(ex.detail ? `${ex.message}: ${ex.detail}` : ex.message, "bad");
       } finally {
         testBtn.disabled = false;
       }
