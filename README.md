@@ -16,7 +16,7 @@
      - API แบบ OpenAI-compatible: `LLM_BASE_URL` (เช่น `https://ai.thirx.com/v1`), `LLM_API_KEY`, `LLM_MODEL` (ถ้าตั้ง จะใช้ตัวนี้ก่อน)
      - หรือ Gemini: `GEMINI_API_KEY` จาก Google AI Studio
    - `ADMIN_PASSWORD` รหัสผ่านเข้าหน้า `/admin`
-   - `DATA_DIR=/data`
+   - (ไม่บังคับ) `DATA_DIR` ถ้าแนบ Volume ระบบใช้ path ของ Volume ให้อัตโนมัติ
 3. **เพิ่ม Volume** (ที่เก็บข้อมูลถาวร): ที่ service กด Add Volume (หรือคลิกขวาบนพื้นที่ canvas → Volume) แล้วตั้ง Mount path เป็น `/data`
    ถ้าไม่มี Volume ข้อมูลที่ HR บันทึกจะหายทุกครั้งที่ deploy ใหม่
 4. Settings → Networking → Generate Domain
