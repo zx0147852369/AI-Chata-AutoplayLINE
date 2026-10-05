@@ -485,6 +485,66 @@
     listEl.replaceChildren(dl, ...(rows.length ? rows : [none]));
   }
 
+  // ---------- AI mode switch (Gemini / LLM) ----------
+  function aiModeCard() {
+    const seg = el("div", { className: "seg", role: "group" });
+    seg.setAttribute("aria-label", "โหมด AI");
+    const testBtn = button("ทดสอบการเชื่อมต่อ", { cls: "small" });
+    const status = el("span", { className: "hint" });
+
+    const say = (msg, kind = "") => {
+      status.textContent = msg;
+      status.className = `hint ${kind}`.trim();
+    };
+
+    function draw(info) {
+      const opt = (key, name) => {
+        const ok = info.available[key];
+        const b = el("button", { type: "button" });
+        b.append(name, el("small", { textContent: ok ? info.models[key] : "ยังไม่ได้ตั้งค่า key" }));
+        b.setAttribute("aria-pressed", String(info.active === key));
+        b.disabled = !ok;
+        if (!ok) b.title = key === "llm" ? "ตั้ง LLM_BASE_URL และ LLM_API_KEY ใน Railway Variables" : "ตั้ง GEMINI_API_KEY ใน Railway Variables";
+        b.onclick = async () => {
+          if (info.active === key) return;
+          try {
+            draw(await api("/api/admin/ai", { method: "POST", body: { provider: key } }));
+            say("");
+            toast(`เปลี่ยนเป็นโหมด ${name} แล้ว ใช้กับบอท LINE และตัวช่วยเขียนทันที`);
+          } catch (ex) {
+            handleError(ex);
+          }
+        };
+        return b;
+      };
+      seg.replaceChildren(opt("gemini", "Gemini"), opt("llm", "LLM"));
+      testBtn.disabled = info.active === "none";
+    }
+
+    testBtn.onclick = async () => {
+      say("กำลังทดสอบ...");
+      testBtn.disabled = true;
+      try {
+        const r = await api("/api/admin/ai/test", { method: "POST" });
+        say(`เชื่อมต่อได้ ตอบกลับใน ${(r.ms / 1000).toFixed(1)} วินาที`, "ok");
+      } catch (ex) {
+        if (ex.status === 401) return showLogin(true);
+        say(ex.message, "bad");
+      } finally {
+        testBtn.disabled = false;
+      }
+    };
+
+    api("/api/admin/ai").then(draw).catch(() => say("โหลดโหมด AI ไม่สำเร็จ", "bad"));
+
+    return el(
+      "section",
+      { className: "ai-mode" },
+      el("div", {}, el("div", { className: "ai-mode-title", textContent: "โหมด AI" }), el("p", { className: "hint", textContent: "เลือก AI ที่บอท LINE และตัวช่วยเขียนใช้ตอบ" })),
+      el("div", { className: "ai-mode-controls" }, seg, testBtn, status)
+    );
+  }
+
   function stat(label, small = false) {
     const v = el("div", { className: "v" + (small ? " sm" : "") });
     return { node: el("div", { className: "stat" }, el("div", { className: "k", textContent: label }), v), value: v };
@@ -523,6 +583,7 @@
         el("p", { textContent: "แต่ละหัวข้อแยกเป็นรายการของตัวเอง เพิ่ม แก้ไข หรือลบได้ทีละหัวข้อ และบันทึกทันที บอท LINE ใช้ข้อมูลใหม่ได้เลย" }),
         el("div", { className: "stats" }, sCount.node, sCats.node, sUpd.node)
       ),
+      aiModeCard(),
       el(
         "div",
         { className: "toolbar" },

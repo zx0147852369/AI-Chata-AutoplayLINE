@@ -159,9 +159,32 @@ function toKnowledge(maxChars) {
   return { text, topics: state.sections, hasImages: state.sections.some((s) => s.images.length) };
 }
 
+// Small admin-chosen settings (e.g. which AI mode to use), kept on the volume next to the data
+const SETTINGS_FILE = path.join(DATA_DIR, "settings.json");
+let settings = {};
+try {
+  settings = JSON.parse(fs.readFileSync(SETTINGS_FILE, "utf8")) || {};
+} catch {
+  // none saved yet
+}
+
+function getSettings() {
+  return settings;
+}
+
+function setSetting(key, value) {
+  const next = { ...settings, [key]: value };
+  fs.mkdirSync(DATA_DIR, { recursive: true });
+  const tmp = `${SETTINGS_FILE}.tmp`;
+  fs.writeFileSync(tmp, JSON.stringify(next, null, 2));
+  fs.renameSync(tmp, SETTINGS_FILE);
+  settings = next;
+  return settings;
+}
+
 // Non-sensitive storage status for /health and the admin notice
 function info() {
   return { persistent: Boolean(VOLUME_DIR) && writable, writable, loadedFromDisk, sections: state.sections.length };
 }
 
-module.exports = { get, upsert, remove, move, toKnowledge, info, saveImage, discardUploaded, UPLOAD_DIR };
+module.exports = { get, upsert, remove, move, toKnowledge, info, saveImage, discardUploaded, UPLOAD_DIR, getSettings, setSetting };

@@ -25,9 +25,18 @@ const adminReason = !ADMIN_PASSWORD
     ? `ADMIN_PASSWORD สั้นเกินไป กรุณาตั้งอย่างน้อย ${MIN_ADMIN_PASSWORD} ตัวอักษร`
     : "";
 
-const useOpenAI = Boolean(LLM_BASE_URL && LLM_API_KEY);
-const provider = useOpenAI ? "openai-compatible" : GEMINI_API_KEY ? "gemini" : "none";
-const llmConfigured = provider !== "none";
+const hasLLM = Boolean(LLM_BASE_URL && LLM_API_KEY); // OpenAI-compatible gateway
+const hasGemini = Boolean(GEMINI_API_KEY);
+const llmConfigured = hasLLM || hasGemini;
+
+// The admin's choice (saved on the volume) wins when that provider is configured;
+// otherwise fall back: LLM first, then Gemini
+function activeProvider() {
+  const saved = store.getSettings().aiProvider;
+  if (saved === "gemini" && hasGemini) return "gemini";
+  if (saved === "llm" && hasLLM) return "llm";
+  return hasLLM ? "llm" : hasGemini ? "gemini" : "none";
+}
 
 // Don't exit on missing config: keep the server up so Railway's health check
 // passes and /health can report what is missing.
@@ -40,7 +49,7 @@ const missingEnv = Object.entries({
 if (adminReason) missingEnv.push(adminReason);
 if (!llmConfigured) missingEnv.push("LLM_BASE_URL+LLM_API_KEY (or GEMINI_API_KEY)");
 if (missingEnv.length) console.error(`Missing env vars: ${missingEnv.join(", ")}`);
-console.log(`LLM provider: ${provider}${useOpenAI ? ` (model ${LLM_MODEL})` : ""}`);
+console.log(`AI mode: ${activeProvider()} (llm configured=${hasLLM}, gemini configured=${hasGemini})`);
 
 const NOT_FOUND_REPLY = "ยังไม่มีข้อมูลนี้ค่ะ";
 const MAX_CONTEXT_CHARS = 300000;
@@ -60,7 +69,7 @@ const systemPrompt = (hasImages) => SYSTEM_PROMPT + (hasImages ? IMAGE_RULE : ""
 
 async function completeGemini(system, user, { temperature, timeoutMs }) {
   const res = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`,
+    `${process.env.GEMINI_API_BASE || "https://generativelanguage.googleapis.com"}/v1beta/models/${GEMINI_MODEL}:generateContent`,
     {
       method: "POST",
       headers: { "Content-Type": "application/json", "x-goog-api-key": GEMINI_API_KEY },
@@ -99,8 +108,11 @@ async function completeOpenAI(system, user, { temperature, timeoutMs }) {
     .trim();
 }
 
-const complete = (system, user, opts) =>
-  (useOpenAI ? completeOpenAI : completeGemini)(system, user, { temperature: 0.2, timeoutMs: 25000, ...opts });
+const complete = (system, user, opts) => {
+  const p = activeProvider();
+  if (p === "none") throw new Error("ยังไม่ได้ตั้งค่า LLM");
+  return (p === "gemini" ? completeGemini : completeOpenAI)(system, user, { temperature: 0.2, timeoutMs: 25000, ...opts });
+};
 
 // Employee question -> answer from the company knowledge
 async function askLLM(question, knowledge, system) {
@@ -244,7 +256,7 @@ const app = express();
 app.set("trust proxy", 1);
 app.disable("x-powered-by");
 
-app.get("/health", (_req, res) => res.json({ ok: true, provider, missingEnv, storage: store.info() }));
+app.get("/health", (_req, res) => res.json({ ok: true, provider: activeProvider(), missingEnv, storage: store.info() }));
 
 // LINE webhook (needs the raw body for signature verification)
 app.post("/webhook", express.raw({ type: "*/*" }), (req, res) => {
@@ -330,20 +342,66 @@ app.delete("/api/admin/image/:file", requireAdmin, (req, res) => {
   res.json({ ok: true });
 });
 
-// AI draft: admin only, capped per IP so a stolen session cannot burn the LLM quota
-const genUse = new Map(); // ip -> { count, resetAt }
-const GEN_LIMIT_PER_HOUR = 30;
+// AI mode (Gemini or LLM): which provider the bot and the AI writer use. Admin only.
+const aiInfo = () => ({
+  active: activeProvider(),
+  available: { llm: hasLLM, gemini: hasGemini },
+  models: { llm: LLM_MODEL, gemini: GEMINI_MODEL },
+});
+
+// Calls that spend LLM quota are capped per IP so a stolen session cannot burn it
+const aiUse = new Map(); // ip -> { count, resetAt }
+const AI_LIMIT_PER_HOUR = 30;
+function aiBudgetLeft(ip) {
+  const u = aiUse.get(ip);
+  return !u || u.resetAt <= Date.now() || u.count < AI_LIMIT_PER_HOUR;
+}
+function aiSpend(ip) {
+  const now = Date.now();
+  const u = aiUse.get(ip);
+  if (!u || u.resetAt <= now) aiUse.set(ip, { count: 1, resetAt: now + 60 * 60 * 1000 });
+  else u.count += 1;
+}
+
+app.get("/api/admin/ai", requireAdmin, (_req, res) => res.json(aiInfo()));
+
+app.post("/api/admin/ai", requireAdmin, json, (req, res) => {
+  const p = req.body?.provider;
+  if (p !== "llm" && p !== "gemini") return res.status(400).json({ error: "โหมดไม่ถูกต้อง" });
+  if ((p === "llm" && !hasLLM) || (p === "gemini" && !hasGemini)) {
+    return res.status(400).json({ error: p === "llm" ? "ยังไม่ได้ตั้ง LLM_BASE_URL และ LLM_API_KEY ใน Railway Variables" : "ยังไม่ได้ตั้ง GEMINI_API_KEY ใน Railway Variables" });
+  }
+  try {
+    store.setSetting("aiProvider", p);
+    res.json(aiInfo());
+  } catch (err) {
+    console.error("save ai mode failed:", err.message);
+    res.status(500).json({ error: "บันทึกโหมด AI ไม่สำเร็จ" });
+  }
+});
+
+// Quick check that the selected mode answers (key, URL and model name are all valid)
+app.post("/api/admin/ai/test", requireAdmin, async (req, res) => {
+  if (!llmConfigured) return res.status(503).json({ error: "ยังไม่ได้ตั้งค่า LLM" });
+  if (!aiBudgetLeft(req.ip)) return res.status(429).json({ error: "ใช้ AI บ่อยเกินไป กรุณารอสักครู่" });
+  aiSpend(req.ip);
+  const started = Date.now();
+  try {
+    const reply = await complete("ตอบสั้นๆ เป็นภาษาไทย", "ตอบว่า พร้อมใช้งาน", { timeoutMs: 20000 });
+    res.json({ ok: true, ms: Date.now() - started, reply: reply.slice(0, 80) });
+  } catch (err) {
+    console.error("ai test failed:", err.message);
+    res.status(502).json({ error: "เชื่อมต่อ AI ไม่สำเร็จ ตรวจสอบ key, URL และชื่อโมเดลใน Railway Variables" });
+  }
+});
+
+// AI draft: admin only
 app.post("/api/admin/generate", requireAdmin, json, async (req, res) => {
   if (!llmConfigured) return res.status(503).json({ error: "ยังไม่ได้ตั้งค่า LLM (LLM_BASE_URL + LLM_API_KEY หรือ GEMINI_API_KEY)" });
-  const now = Date.now();
-  const u = genUse.get(req.ip);
-  if (u && u.resetAt > now && u.count >= GEN_LIMIT_PER_HOUR) {
-    return res.status(429).json({ error: "ใช้ AI ช่วยเขียนบ่อยเกินไป กรุณารอสักครู่" });
-  }
+  if (!aiBudgetLeft(req.ip)) return res.status(429).json({ error: "ใช้ AI ช่วยเขียนบ่อยเกินไป กรุณารอสักครู่" });
   const instruction = String(req.body?.instruction || "").trim().slice(0, 4000);
   if (!instruction) return res.status(400).json({ error: "กรุณาบอก AI ว่าต้องการให้เขียนเรื่องอะไร" });
-  if (!u || u.resetAt <= now) genUse.set(req.ip, { count: 1, resetAt: now + 60 * 60 * 1000 });
-  else u.count += 1;
+  aiSpend(req.ip);
   try {
     const text = await draftTopic({
       instruction,

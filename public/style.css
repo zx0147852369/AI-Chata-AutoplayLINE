@@ -386,3 +386,45 @@ label.field { display: block; font-size: 13.5px; font-weight: 600; color: var(--
 .check { display: flex; align-items: center; gap: 8px; margin-top: 10px; font-size: 14px; color: var(--muted); }
 .check input { width: 16px; height: 16px; accent-color: var(--accent); }
 .check input:disabled + * , .check:has(input:disabled) { opacity: 0.55; }
+
+/* ---------- AI mode switch ---------- */
+.ai-mode {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px 24px;
+  margin-top: 14px;
+  padding: 16px 20px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  box-shadow: var(--shadow-sm);
+}
+.ai-mode-title { font-weight: 700; line-height: 1.4; }
+.ai-mode .hint { margin: 0; }
+.ai-mode-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
+.seg { display: inline-flex; gap: 4px; padding: 4px; background: var(--bg); border: 1px solid var(--line); border-radius: 12px; }
+.seg button {
+  min-width: 128px;
+  padding: 7px 16px;
+  font: inherit;
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 1.35;
+  text-align: left;
+  color: var(--muted);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 9px;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+.seg button small { display: block; font-size: 12px; font-weight: 400; color: var(--subtle); overflow-wrap: anywhere; }
+.seg button:hover:not(:disabled):not([aria-pressed="true"]) { color: var(--ink); background: #fff; }
+.seg button[aria-pressed="true"] { color: #fff; background: var(--accent); box-shadow: 0 4px 12px rgba(15, 118, 110, 0.25); }
+.seg button[aria-pressed="true"] small { color: rgba(255, 255, 255, 0.82); }
+.seg button:disabled { opacity: 0.5; cursor: not-allowed; }
+.seg button:focus-visible { outline: 3px solid var(--accent-soft); outline-offset: 1px; }
+.hint.ok { color: #1a7f55; }
+.hint.bad { color: var(--danger); }
