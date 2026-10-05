@@ -18,6 +18,7 @@
 }
 
 * { box-sizing: border-box; }
+html { scroll-padding-top: 160px; } /* keep focused cards clear of the sticky header and toolbar */
 [hidden] { display: none !important; }
 
 body {
@@ -222,6 +223,7 @@ label.field { display: block; font-size: 13.5px; font-weight: 600; color: var(--
   transition: box-shadow 0.2s, border-color 0.2s;
 }
 .card:focus-within { border-color: #bfe2dd; box-shadow: var(--shadow); }
+.card.invalid { border-color: var(--danger); box-shadow: 0 0 0 4px var(--danger-soft); }
 .card-head { display: flex; align-items: center; gap: 14px; margin-bottom: 14px; }
 .badge {
   flex: none;

@@ -181,6 +181,7 @@
       node.addEventListener("input", () => {
         s[key] = node.value;
         if (key === "body") showCount();
+        node.closest(".card")?.classList.remove("invalid");
         setDirty(true);
       });
     }
@@ -233,7 +234,9 @@
     if (q) q.value = "";
     setDirty(true);
     renderList();
-    listEl.querySelector("input.input")?.focus();
+    const first = listEl.querySelector(".card");
+    first?.scrollIntoView({ behavior: "smooth", block: "center" });
+    first?.querySelector("input.input")?.focus({ preventScroll: true });
   }
 
   function renderList() {
@@ -259,6 +262,20 @@
   }
 
   async function save(btn) {
+    // Don't silently drop blank sections: point at them instead
+    const blankIdx = sections.findIndex((s) => !s.title.trim() && !s.body.trim());
+    if (blankIdx !== -1) {
+      query = "";
+      const q = document.getElementById("q");
+      if (q) q.value = "";
+      renderList();
+      const card = listEl.querySelector(`[data-idx="${blankIdx}"]`);
+      card?.classList.add("invalid");
+      card?.scrollIntoView({ behavior: "smooth", block: "center" });
+      card?.querySelector(".title-input")?.focus({ preventScroll: true });
+      toast("กรุณากรอกหัวข้อหรือรายละเอียดก่อนบันทึก หรือกดลบหัวข้อที่ไม่ใช้");
+      return;
+    }
     btn.disabled = true;
     try {
       const data = await api("/api/admin/rules", { method: "PUT", body: { sections } });
